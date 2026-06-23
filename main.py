@@ -711,6 +711,14 @@ def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
+        # Eski user_session.session faylini o'chirish
+        old_session = os.path.join(BASE_DIR, "user_session.session")
+        if os.path.exists(old_session):
+            try:
+                os.remove(old_session)
+            except:
+                pass
+        
         # Sessionni o'chirish (agar bor bo'lsa va invalid bo'lsa)
         session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
         if os.path.exists(session_file):
