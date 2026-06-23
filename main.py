@@ -849,11 +849,25 @@ def handle_login_phone(client, message, user_id, text):
     
     # Client yaratish va kod so'rash
     try:
-        user_client = get_user_client(user_id)
+        # Sessionni o'chirish (agar bor bo'lsa)
+        session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+        if os.path.exists(session_file):
+            try:
+                os.remove(session_file)
+            except:
+                pass
         
-        # Connect qilish (faqat connected bo'lmasa)
-        if not user_client.is_connected:
-            user_client.connect()
+        # Har safar yangi client yaratish (get_user_client ishlatmaslik)
+        session_name = f"sessions/user_{user_id}"
+        user_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+        
+        # Connect qilish
+        user_client.connect()
         
         # Kod so'rash
         sent_code = user_client.send_code(phone)
