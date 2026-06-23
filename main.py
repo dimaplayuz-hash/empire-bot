@@ -81,14 +81,6 @@ bot_app = Client(
     workdir=BASE_DIR,
 )
 
-# 2. USER KLIYENTI (Haqiqiy scraping va qidiruv uchun)
-user_app = Client(
-    "user_session",
-    api_id=config["API_ID"],
-    api_hash=config["API_HASH"],
-    workdir=BASE_DIR,
-)
-
 # ================= YORDAMCHI FUNKSIYALAR =================
 def parse_group_input(raw: str):
     """Guruh username, ID yoki invite havolasini ajratib oladi."""
@@ -163,19 +155,6 @@ def explain_telegram_error(error: Exception) -> str:
     return f"❌ Xatolik yuz berdi.\n\n`{err}`"
 
 
-def check_user_session(client):
-    me = client.get_me()
-    if me.is_bot:
-        return (
-            "⚠️ **User sessiya noto'g'ri!**\n\n"
-            "Scraper uchun **telefon raqamingiz** (+998...) bilan kirish kerak, "
-            "bot token emas!\n\n"
-            "1. Botni to'xtating\n"
-            "2. `Empire bot/user_session.session` faylini o'chiring\n"
-            "3. Botni qayta ishga tushiring va **telefon raqam** kiriting"
-        )
-    return None
-
 # ================= MA'LUMOTLAR BAZASI =================
 user_states = {}
 user_pagination = {}
@@ -187,6 +166,37 @@ COMMAND_COOLDOWN = 1.0  # 1 soniya cooldown (qisqartirildi)
 PAGINATION_COOLDOWN = 0.8
 PAGINATION_SIZE = 50
 DATABASE_DIR = os.path.join(BASE_DIR, "database")
+SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(DATABASE_DIR, exist_ok=True)
+
+# User sessionlarni boshqarish
+user_clients = {}  # {user_id: Client}
+clients_lock = threading.Lock()
+
+# Login uchun vaqtinchalik ma'lumotlar
+login_data = {}  # {user_id: {"phone": "...", "phone_code_hash": "..."}}
+
+def get_user_client(user_id):
+    """User uchun client olish yoki yaratish"""
+    with clients_lock:
+        if user_id in user_clients:
+            return user_clients[user_id]
+        
+        session_name = f"sessions/user_{user_id}"
+        client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+        user_clients[user_id] = client
+        return client
+
+def is_user_logged_in(user_id):
+    """User login qilganmi tekshirish"""
+    session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+    return os.path.exists(session_file)
 
 # ================= ADMINLIK TIZIMI =================
 # Adminlar ro'yxati (ID lar)
@@ -468,7 +478,8 @@ def chunk_list(items, batch_size):
 
 def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None):
     try:
-        chat_id, chat_title = resolve_chat_id(user_app, raw_group)
+        user_client = get_user_client(target_id)
+        chat_id, chat_title = resolve_chat_id(user_client, raw_group)
         
         if filter_type == "📊 Xabarlar orqali (Sekin)":
             max_messages = message_count if message_count else 1000
@@ -482,7 +493,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
             msg_count = 0
             progress_interval = max(100, max_messages // 100)  # Dynamic progress reporting
             
-            for message in user_app.get_chat_history(chat_id, limit=max_messages):
+            for message in user_client.get_chat_history(chat_id, limit=max_messages):
                 if message.from_user and not message.from_user.is_bot and message.from_user.username:
                     scraped.add(f"@{message.from_user.username}")
                 msg_count += 1
@@ -493,7 +504,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
                             bot_app.edit_message_text(
                                 target_id,
                                 last_bot_messages[target_id]["message_id"],
-                                f"� **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n� {msg_count:,}/{max_messages:,} ta xabar o'qildi...",
+                                f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {msg_count:,}/{max_messages:,} ta xabar o'qildi...",
                             )
                     except:
                         pass  # Edit qilib bo'lmadi, davom etamiz
@@ -509,7 +520,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
             member_count = 0
             progress_interval = 50  # Har 50 ta userdan keyin update
             
-            for member in user_app.get_chat_members(chat_id):
+            for member in user_client.get_chat_members(chat_id):
                 if member.user.is_bot or not member.user.username:
                     continue
 
@@ -583,6 +594,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
 
 def broadcast_task(target_id, recipients, body):
     try:
+        user_client = get_user_client(target_id)
         success = 0
         failed = 0
         total = len(recipients)
@@ -596,7 +608,7 @@ def broadcast_task(target_id, recipients, body):
         
         for idx, username in enumerate(recipients):
             try:
-                user_app.send_message(username, body)
+                user_client.send_message(username, body)
                 success += 1
                 
                 # Har 10 ta userdan keyin progress update
@@ -619,7 +631,7 @@ def broadcast_task(target_id, recipients, body):
             except FloodWait as e:
                 time.sleep(e.value + 5)
                 try:
-                    user_app.send_message(username, body)
+                    user_client.send_message(username, body)
                     success += 1
                 except Exception:
                     failed += 1
@@ -687,7 +699,19 @@ def start_command(client, message):
     if bot_offline:
         return  # Offline bo'lsa, hech narsa qilmaymiz
     
-    user_states[message.from_user.id] = "menu"
+    # Login check
+    if not is_user_logged_in(user_id):
+        user_states[user_id] = "login_phone"
+        text = (
+            "🔐 **Telefon raqamingizni kiriting**\n\n"
+            "Botdan foydalanish uchun Telegram akkauntingizga ulanishingiz kerak.\n\n"
+            "Format: `+998901234567`\n\n"
+            "❌ Bekor qilish uchun: /cancel"
+        )
+        message.reply_text(text)
+        return
+    
+    user_states[user_id] = "menu"
     first_name = message.from_user.first_name or "Mijoz"
     
     text = (
@@ -700,6 +724,18 @@ def start_command(client, message):
         "Quyidagi tugmalardan birini tanlang:"
     )
     message.reply_text(text, reply_markup=main_menu())
+
+
+@bot_app.on_message(filters.command("cancel") & filters.private)
+def cancel_command(client, message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id)
+    
+    if state in ["login_phone", "login_code", "login_password"]:
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+    else:
+        message.reply_text("Hech narsa bekor qilinmadi.")
 
 
 @bot_app.on_message(filters.command("shutdown") & filters.private)
@@ -756,12 +792,161 @@ def admins_command(client, message):
     
     message.reply_text(text)
 
+
+# Login flow handlers
+def handle_login_phone(client, message, user_id, text):
+    """Telefon raqamni qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    # Telefon raqam formatini tekshirish
+    phone = text.strip().replace(" ", "").replace("-", "")
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    
+    # Oddiy tekshirish
+    if len(phone) < 10 or not phone.replace("+", "").isdigit():
+        message.reply_text("❌ Noto'g'ri telefon raqam formati.\n\nFormat: `+998901234567`")
+        return
+    
+    # Client yaratish va kod so'rash
+    try:
+        user_client = get_user_client(user_id)
+        
+        # Kod so'rash
+        sent_code = user_client.send_code(phone)
+        login_data[user_id] = {
+            "phone": phone,
+            "phone_code_hash": sent_code.phone_code_hash
+        }
+        
+        user_states[user_id] = "login_code"
+        message.reply_text(
+            "🔐 **Tasdiqlash kodini kiriting**\n\n"
+            "Telegram app yoki SMS orqali kelgan kodni kiriting.\n\n"
+            "❌ Bekor qilish uchun: /cancel"
+        )
+    except Exception as e:
+        message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
+
+
+def handle_login_code(client, message, user_id, text):
+    """Tasdiqlash kodini qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    if user_id not in login_data:
+        message.reply_text("❌ Xatolik. Qaytadan boshlang (/start)")
+        user_states[user_id] = "menu"
+        return
+    
+    try:
+        user_client = get_user_client(user_id)
+        data = login_data[user_id]
+        
+        # Kod bilan sign in
+        user_client.sign_in(
+            data["phone"],
+            data["phone_code_hash"],
+            text.strip()
+        )
+        
+        # Muvaffaqiyatli login
+        del login_data[user_id]
+        user_states[user_id] = "menu"
+        
+        first_name = message.from_user.first_name or "Mijoz"
+        message.reply_text(
+            f"✅ **Muvaffaqiyatli ulandi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            "📌 **Mavjud xizmatlar:**\n"
+            "• 🚀 Scraper — guruhlardan user yig'ish\n"
+            "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            "Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        error_str = str(e)
+        if "SESSION_PASSWORD_NEEDED" in error_str or "Two-step verification" in error_str:
+            user_states[user_id] = "login_password"
+            message.reply_text(
+                "🔐 **2FA parolni kiriting**\n\n"
+                "Sizning akkauntingizda ikki bosqichli himoya yoqilgan.\n"
+                "Telegram parolingizni kiriting.\n\n"
+                "❌ Bekor qilish uchun: /cancel"
+            )
+        else:
+            message.reply_text(f"❌ Xatolik: {str(e)}\n\nKodni tekshiring va qaytadan urinib ko'ring.")
+
+
+def handle_login_password(client, message, user_id, text):
+    """2FA parolni qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    if user_id not in login_data:
+        message.reply_text("❌ Xatolik. Qaytadan boshlang (/start)")
+        user_states[user_id] = "menu"
+        return
+    
+    try:
+        user_client = get_user_client(user_id)
+        data = login_data[user_id]
+        
+        # Parol bilan sign in
+        user_client.sign_in(
+            data["phone"],
+            password=text.strip()
+        )
+        
+        # Muvaffaqiyatli login
+        del login_data[user_id]
+        user_states[user_id] = "menu"
+        
+        first_name = message.from_user.first_name or "Mijoz"
+        message.reply_text(
+            f"✅ **Muvaffaqiyatli ulandi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            "📌 **Mavjud xizmatlar:**\n"
+            "• 🚀 Scraper — guruhlardan user yig'ish\n"
+            "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            "Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        message.reply_text(f"❌ Xatolik: {str(e)}\n\nParolni tekshiring va qaytadan urinib ko'ring.")
+
+
 @bot_app.on_message(filters.private & ~filters.command("start"))
 def process_messages(client, message):
     user_id = message.from_user.id
     text = message.text
 
     if not text:
+        return
+    
+    # Login flow
+    state = user_states.get(user_id)
+    if state == "login_phone":
+        handle_login_phone(client, message, user_id, text)
+        return
+    
+    if state == "login_code":
+        handle_login_code(client, message, user_id, text)
+        return
+    
+    if state == "login_password":
+        handle_login_password(client, message, user_id, text)
         return
     
     # Offline check - admin buyruqlaridan tashqari barchasini ignore qiladi
@@ -882,15 +1067,10 @@ def process_messages(client, message):
 
     # ----- SCRAPER (FULL OLISH) -----
     elif state == "scrape_wait_group":
-        session_err = check_user_session(user_app)
-        if session_err:
-            send_or_edit_message(client, user_id, session_err, reply_markup=main_menu())
-            user_states[user_id] = "menu"
-            return
-
         group_input = text
         try:
-            chat_id, chat_title = resolve_chat_id(user_app, text)
+            user_client = get_user_client(user_id)
+            chat_id, chat_title = resolve_chat_id(user_client, text)
             scraper_selections[user_id] = {"group": group_input, "chat_id": chat_id, "chat_title": chat_title}
             user_states[user_id] = "scrape_wait_filter"
             send_or_edit_message(client, user_id,
@@ -998,7 +1178,8 @@ def process_messages(client, message):
         )
 
         try:
-            result = user_app.invoke(functions.contacts.Search(q=keyword, limit=20))
+            user_client = get_user_client(user_id)
+            result = user_client.invoke(functions.contacts.Search(q=keyword, limit=20))
 
             found_chats = []
             for chat in result.chats:

@@ -1,6 +1,7 @@
 # Session files (local development uchun)
-# *.session  - Temporary disabled for server deployment
-# *.session-journal
+*.session
+*.session-journal
+sessions/
 
 # Environment variables
 .env
