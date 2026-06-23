@@ -175,7 +175,7 @@ user_clients = {}  # {user_id: Client}
 clients_lock = threading.Lock()
 
 # Login uchun vaqtinchalik ma'lumotlar
-login_data = {}  # {user_id: {"phone": "...", "in_progress": bool}}
+login_data = {}  # {user_id: {"phone": "...", "phone_code_hash": "...", "client": Client}}
 
 def get_user_client(user_id):
     """User uchun client olish yoki yaratish"""
@@ -825,14 +825,19 @@ def handle_login_phone(client, message, user_id, text):
     try:
         user_client = get_user_client(user_id)
         
-        # Clientni connect qilish (har doim)
+        # Clientni disconnect qilib qayta connect qilish
+        if user_client.is_connected:
+            user_client.disconnect()
+        
+        # Connect qilish
         user_client.connect()
         
         # Kod so'rash
         sent_code = user_client.send_code(phone)
         login_data[user_id] = {
             "phone": phone,
-            "phone_code_hash": sent_code.phone_code_hash
+            "phone_code_hash": sent_code.phone_code_hash,
+            "client": user_client
         }
         
         user_states[user_id] = "login_code"
@@ -858,8 +863,8 @@ def handle_login_code(client, message, user_id, text):
         return
     
     try:
-        user_client = get_user_client(user_id)
         data = login_data[user_id]
+        user_client = data["client"]
         
         # Kod bilan sign in
         user_client.sign_in(
@@ -911,8 +916,8 @@ def handle_login_password(client, message, user_id, text):
         return
     
     try:
-        user_client = get_user_client(user_id)
         data = login_data[user_id]
+        user_client = data["client"]
         
         # Parol bilan sign in
         user_client.sign_in(
