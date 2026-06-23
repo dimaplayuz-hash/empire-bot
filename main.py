@@ -1341,39 +1341,12 @@ def reset_user_session():
                 print(f"⚠️ {name} hozir band. Botni to'xtatib, qo'lda o'chiring.")
 
 
-async def start_user_client():
-    user_session_path = os.path.join(BASE_DIR, "user_session.session")
-    if not os.path.exists(user_session_path):
-        print("\n📱 User sessiya yo'q.")
-        print("Scraper uchun terminalda +998... telefon raqamingizni kiriting.\n")
-
-    try:
-        await user_app.start()
-        print("✅ User sessiya muvaffaqiyatli ulandi.\n")
-    except UserDeactivated:
-        print("\n⚠️ Telegram user akkauntingiz bloklangan yoki o'chirilgan!")
-        try:
-            await user_app.stop()
-        except Exception:
-            pass
-        reset_user_session()
-        print("Eski sessiya o'chirildi.")
-        print("Botni qayta ishga tushiring va YANGI +998... raqam kiriting.")
-        print("Hozir bot ishlaydi, lekin Scraper ishlamaydi.\n")
-    except Exception as e:
-        if "USER_DEACTIVATED" in str(e):
-            try:
-                await user_app.stop()
-            except Exception:
-                pass
-            reset_user_session()
-            print("\n⚠️ User sessiya yaroqsiz. Qayta kirish kerak.\n")
-        else:
-            print(f"\n⚠️ User sessiya ulanmadi: {e}\n")
-
-
 async def run_bot():
     try:
+        await bot_app.start()
+    except FloodWait as e:
+        print(f"\n⚠️ FloodWait: {e.value} sekund kutish kerak...")
+        await asyncio.sleep(e.value)
         await bot_app.start()
     except UserDeactivated:
         print("\n⚠️ Bot sessiyasi yaroqsiz. Eski sessiya o'chirilmoqda...")
@@ -1384,14 +1357,10 @@ async def run_bot():
         reset_user_session()
         await bot_app.start()
 
-    asyncio.create_task(start_user_client())
-
     try:
         await idle()
     finally:
         await bot_app.stop()
-        if user_app.is_connected:
-            await user_app.stop()
 
 
 if __name__ == "__main__":
