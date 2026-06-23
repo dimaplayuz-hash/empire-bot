@@ -1,0 +1,1151 @@
+import os
+import re
+import time
+import json
+import asyncio
+import threading
+from pyrogram import Client, filters
+from pyrogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
+from pyrogram.errors import (
+    FloodWait,
+    PeerIdInvalid,
+    UserPrivacyRestricted,
+    UsernameNotOccupied,
+    UserNotParticipant,
+    InviteHashExpired,
+    ChannelPrivate,
+    UserAlreadyParticipant,
+    UserDeactivated,
+)
+from pyrogram import idle
+from pyrogram.raw import functions
+
+# ================= KONSOL VA TOKEN SOZLAMALARI =================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+
+def load_config():
+    parent_config = os.path.join(os.path.dirname(BASE_DIR), "config.json")
+    if not os.path.exists(CONFIG_FILE) and os.path.exists(parent_config):
+        with open(parent_config, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+        return config
+    if not os.path.exists(CONFIG_FILE):
+        token = input("Bot Tokenni kiriting (@BotFather dan olingan): ")
+        config = {
+            "API_ID": 36427121,
+            "API_HASH": "f4b857c7d7e08dce9244615ef32d7cc7",
+            "BOT_TOKEN": token
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=4)
+        return config
+    else:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+
+config = load_config()
+
+# 1. BOT KLIYENTI (Tugmalar va boshqaruv uchun)
+bot_app = Client(
+    "empire_bot_session",
+    api_id=config["API_ID"],
+    api_hash=config["API_HASH"],
+    bot_token=config["BOT_TOKEN"],
+    workdir=BASE_DIR,
+)
+
+# 2. USER KLIYENTI (Haqiqiy scraping va qidiruv uchun)
+user_app = Client(
+    "user_session",
+    api_id=config["API_ID"],
+    api_hash=config["API_HASH"],
+    workdir=BASE_DIR,
+)
+
+# ================= YORDAMCHI FUNKSIYALAR =================
+def parse_group_input(raw: str):
+    """Guruh username, ID yoki invite havolasini ajratib oladi."""
+    text = raw.strip()
+    if not text:
+        return None
+
+    if text.lstrip("-").isdigit():
+        return int(text)
+
+    invite_match = re.search(
+        r"(?:https?://)?(?:www\.)?t\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)",
+        text,
+    )
+    if invite_match:
+        return f"https://t.me/+{invite_match.group(1)}"
+
+    link_match = re.search(r"(?:https?://)?(?:www\.)?t\.me/([A-Za-z0-9_]+)", text)
+    if link_match:
+        username = link_match.group(1)
+        if username.lower() not in ("joinchat", "addstickers", "share", "proxy", "socks"):
+            return username
+
+    if text.startswith("@"):
+        return text[1:]
+
+    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", text):
+        return text
+
+    return text
+
+
+def resolve_chat_id(client, raw: str):
+    """Guruhni topadi; invite link bo'lsa avval qo'shiladi."""
+    target = parse_group_input(raw)
+    if not target:
+        raise ValueError("Guruh manzili bo'sh")
+
+    if isinstance(target, str) and target.startswith("https://t.me/+"):
+        try:
+            chat = client.join_chat(target)
+        except UserAlreadyParticipant:
+            chat = client.get_chat(target)
+        return chat.id, chat.title or "Guruh"
+
+    chat = client.get_chat(target)
+    return chat.id, chat.title or str(target)
+
+
+def explain_telegram_error(error: Exception) -> str:
+    err = str(error)
+    if isinstance(error, UsernameNotOccupied) or "USERNAME_NOT_OCCUPIED" in err:
+        return (
+            "❌ **Bunday @username topilmadi!**\n\n"
+            "Ehtimol:\n"
+            "• Guruh **nomi** emas, **@username** yuborilishi kerak\n"
+            "• Username xato yozilgan (`@empire_mafia` kabi)\n"
+            "• Guruh yopiq — **invite havola** yuboring: `https://t.me/+xxxxx`\n"
+            "• Guruh o'chirilgan yoki username o'zgartirilgan"
+        )
+    if isinstance(error, UserNotParticipant) or "USER_NOT_PARTICIPANT" in err:
+        return (
+            "❌ **Siz bu guruhda yo'qsiz!**\n\n"
+            "Scraper ishlashi uchun user akkauntingiz avval guruhga qo'shilishi kerak."
+        )
+    if isinstance(error, ChannelPrivate) or "CHANNEL_PRIVATE" in err:
+        return "❌ **Guruh yopiq!** Invite havola (`t.me/+...`) yuboring yoki guruhga qo'shiling."
+    if isinstance(error, InviteHashExpired) or "INVITE_HASH_EXPIRED" in err:
+        return "❌ **Invite havola muddati tugagan.** Yangi havola oling."
+    if "PEER_ID_INVALID" in err:
+        return "❌ **Guruh topilmadi.** Username yoki havolani tekshiring."
+    return f"❌ Xatolik yuz berdi.\n\n`{err}`"
+
+
+def check_user_session(client):
+    me = client.get_me()
+    if me.is_bot:
+        return (
+            "⚠️ **User sessiya noto'g'ri!**\n\n"
+            "Scraper uchun **telefon raqamingiz** (+998...) bilan kirish kerak, "
+            "bot token emas!\n\n"
+            "1. Botni to'xtating\n"
+            "2. `Empire bot/user_session.session` faylini o'chiring\n"
+            "3. Botni qayta ishga tushiring va **telefon raqam** kiriting"
+        )
+    return None
+
+# ================= MA'LUMOTLAR BAZASI =================
+user_states = {}
+user_pagination = {}
+active_tasks = {}
+last_commands = {}
+pagination_cooldown = {}
+tasks_lock = threading.Lock()
+COMMAND_COOLDOWN = 1.0  # 1 soniya cooldown (qisqartirildi)
+PAGINATION_COOLDOWN = 0.8
+PAGINATION_SIZE = 50
+DATABASE_DIR = os.path.join(BASE_DIR, "database")
+
+# ================= ADMINLIK TIZIMI =================
+# Adminlar ro'yxati (ID lar)
+ADMIN_IDS = {
+    8513957498,  # Bosh admin (siz)
+    8691898228,  # Ikkinchi admin
+}
+
+# Bosh admin ID (faqat /admins buyruqi uchun)
+SUPER_ADMIN_ID = 8513957498
+
+# Ikkinchi admin ID (faqat /shutdown va /power buyruqlari uchun)
+SECOND_ADMIN_ID = 8691898228
+
+# Bot offline holati
+bot_offline = False
+
+def is_admin(user_id):
+    """Foydalanuvchi admin ekanligini tekshiradi"""
+    return user_id in ADMIN_IDS
+
+def is_super_admin(user_id):
+    """Foydalanuvchi bosh admin ekanligini tekshiradi"""
+    return user_id == SUPER_ADMIN_ID
+
+def is_second_admin(user_id):
+    """Foydalanuvchi ikkinchi admin ekanligini tekshiradi"""
+    return user_id == SECOND_ADMIN_ID
+
+# ================= XABARLARNI KUZATISH =================
+last_bot_messages = {}  # {user_id: {"message_id": int, "is_editable": bool}}
+
+
+def send_or_edit_message(client, target_id, text, reply_markup=None, force_new=False):
+    """Oxirgi xabarni edit qiladi yoki yangisini yuboradi"""
+    if not force_new and target_id in last_bot_messages:
+        last_msg = last_bot_messages[target_id]
+        if last_msg["is_editable"]:
+            try:
+                client.edit_message_text(
+                    target_id,
+                    last_msg["message_id"],
+                    text,
+                    reply_markup=reply_markup,
+                )
+                return
+            except Exception:
+                pass  # Edit qilib bo'lmadi, yangi xabar yuboramiz
+    
+    # Yangi xabar yuborish
+    try:
+        msg = client.send_message(target_id, text, reply_markup=reply_markup)
+        last_bot_messages[target_id] = {
+            "message_id": msg.id,
+            "is_editable": True
+        }
+        return msg
+    except Exception as e:
+        # Agar xabar yuborib bo'lmasa, oddiy reply_text ishlatamiz
+        try:
+            msg = client.send_message(target_id, text, reply_markup=reply_markup)
+            last_bot_messages[target_id] = {
+                "message_id": msg.id,
+                "is_editable": True
+            }
+            return msg
+        except:
+            return None
+
+# ================= HIMOYA TIZIMI =================
+flood_protection = {}  # {user_id: {"count": int, "start_time": float, "blocked_until": float}}
+FLOOD_THRESHOLD = 10  # 10 soniyada 10 ta xabar
+FLOOD_BLOCK_TIME = 60  # 60 soniya blok
+FLOOD_WARNING_TIME = 30  # 30 soniya ogohlantirish
+
+blocked_users = {}  # {user_id: {"blocked_until": float, "reason": str, "warnings": int}}
+MAX_WARNINGS = 3  # 3 ta ogohlantirishdan keyin permanent blok
+
+
+def check_flood(user_id):
+    """Flood attack detection"""
+    now = time.time()
+    
+    # Agar user bloklangan bo'lsa (permanent yoki temporary)
+    if user_id in blocked_users:
+        blocked_until = blocked_users[user_id].get("blocked_until", 0)
+        if blocked_until == 0:  # Permanent block
+            return f"🚫 **Siz bloklangansiz!**\n\nSabab: {blocked_users[user_id]['reason']}\n\nAdmin bilan bog'laning.", True
+        elif now < blocked_until:  # Temporary block
+            remaining = int(blocked_until - now)
+            return f"⚠️ **Flood himoya!**\n\nSiz juda tez xabar yuboryapsiz.\n⏳ {remaining} soniya kuting.", True
+        else:
+            # Block muddati tugadi, qaytadan boshlash
+            del blocked_users[user_id]
+    
+    # Flood countni yangilash
+    if user_id not in flood_protection:
+        flood_protection[user_id] = {"count": 0, "start_time": now, "blocked_until": 0}
+    
+    # 10 soniyadan o'tsa, countni qaytadan boshlash
+    if now - flood_protection[user_id]["start_time"] > 10:
+        flood_protection[user_id]["count"] = 0
+        flood_protection[user_id]["start_time"] = now
+    
+    flood_protection[user_id]["count"] += 1
+    
+    # Flood thresholdni tekshirish
+    if flood_protection[user_id]["count"] >= FLOOD_THRESHOLD:
+        # Userni bloklash
+        if user_id not in blocked_users:
+            blocked_users[user_id] = {"blocked_until": 0, "reason": "", "warnings": 0}
+        
+        blocked_users[user_id]["warnings"] += 1
+        warnings = blocked_users[user_id]["warnings"]
+        
+        if warnings >= MAX_WARNINGS:
+            # Permanent block
+            blocked_users[user_id]["blocked_until"] = 0
+            blocked_users[user_id]["reason"] = "Ko'p marta flood qilish"
+            flood_protection[user_id]["count"] = 0
+            return f"🚫 **PERMANENT BLOK!**\n\nSiz {MAX_WARNINGS} marta ogohlantirildingiz.\nEndi botdan foydalanish taqiqlandi.", True
+        else:
+            # Temporary block
+            block_time = FLOOD_BLOCK_TIME * warnings  # Har safar ko'payadi
+            blocked_users[user_id]["blocked_until"] = now + block_time
+            flood_protection[user_id]["count"] = 0
+            return f"⚠️ **FLOOD HIMOYA FAOL!**\n\nSiz juda ko'p xabar yubordingiz.\n⏳ {block_time} soniya bloklandingiz.\n⚠️ Ogohlantirish: {warnings}/{MAX_WARNINGS}", True
+    
+    # Warning
+    if flood_protection[user_id]["count"] >= FLOOD_THRESHOLD - 3:
+        return f"⚠️ **Ogohlantirish!**\n\nTez-tez xabar yubormang.\nAks holda bloklanishingiz mumkin.", False
+    
+    return None, False
+
+MENU_BUTTONS = frozenset({
+    "🚀 Scraper",
+    "🔍 Guruh Qidirish",
+    "📨 Xabar yuborish",
+    "📁 Yig'ilgan userlar",
+})
+
+DATABASE_BUTTONS = frozenset({
+    "🗑️ Bazani tozalash",
+    "🏠 Asosiy menyu",
+})
+
+SCRAPER_FILTERS = frozenset({
+    "⚡ Avtomatik (Tez)",
+    "📊 Xabarlar orqali (Sekin)",
+    "🌸 Qizlar (Filtrlangan)",
+    "👱‍♀️ Adminlar",
+})
+
+TASK_LABELS = {
+    "scrape": "🚀 Scraper",
+    "broadcast": "📨 Xabar yuborish",
+    "search": "🔍 Guruh qidirish",
+}
+
+DEDUP_EXEMPT = frozenset({"❌ Bekor qilish", "/cancel"})
+
+scraper_selections = {}
+
+
+def get_active_task(user_id):
+    with tasks_lock:
+        return active_tasks.get(user_id)
+
+
+def acquire_task(user_id, task_name):
+    with tasks_lock:
+        current = active_tasks.get(user_id)
+        if current:
+            return False, current
+        active_tasks[user_id] = task_name
+        return True, None
+
+
+def release_task(user_id, task_name):
+    with tasks_lock:
+        if active_tasks.get(user_id) == task_name:
+            active_tasks.pop(user_id, None)
+
+
+def is_duplicate_command(user_id, text):
+    now = time.time()
+    with tasks_lock:
+        prev = last_commands.get(user_id)
+        if prev and prev["text"] == text and now - prev["time"] < COMMAND_COOLDOWN:
+            return True
+        last_commands[user_id] = {"text": text, "time": now}
+        return False
+
+
+def active_task_message(task_name):
+    return f"⚠️ **{TASK_LABELS.get(task_name, task_name)}** hali ishlayapti. Tugashini kuting."
+
+if not os.path.exists(DATABASE_DIR):
+    os.makedirs(DATABASE_DIR)
+
+def get_user_file(user_id):
+    return os.path.join(DATABASE_DIR, f"users_{user_id}.txt")
+
+
+def load_user_database(user_id):
+    file_path = get_user_file(user_id)
+    if not os.path.exists(file_path):
+        return []
+    with open(file_path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def save_user_database(user_id, usernames):
+    with open(get_user_file(user_id), "w", encoding="utf-8") as f:
+        for username in usernames:
+            f.write(f"{username}\n")
+
+
+def format_user_batch(total, batch_usernames, start_num, end_num):
+    lines = [
+        f"📊 Yig'ildi: {total} user",
+        f"({start_num}-{end_num})",
+        "",
+    ]
+    lines.extend(batch_usernames)
+    return "\n".join(lines)
+
+
+def get_total_pages(count, batch_size=PAGINATION_SIZE):
+    return max(1, (count + batch_size - 1) // batch_size)
+
+
+def get_page_slice(usernames, page, batch_size=PAGINATION_SIZE):
+    start = page * batch_size
+    chunk = usernames[start : start + batch_size]
+    return chunk, start + 1, start + len(chunk)
+
+
+def build_nav_keyboard(page, total_users, batch_size=PAGINATION_SIZE):
+    if total_users <= batch_size:
+        return None
+
+    total_pages = get_total_pages(total_users, batch_size)
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton("⬅️ Oldingi", callback_data="pg:prev"))
+    if page < total_pages - 1:
+        row.append(InlineKeyboardButton("➡️ Orqaga", callback_data="pg:next"))
+    row.append(InlineKeyboardButton("❌ Yopish", callback_data="pg:close"))
+    return InlineKeyboardMarkup([row])
+
+
+def show_paginated_users(client, target_id, usernames, page=0):
+    total = len(usernames)
+    chunk, start_num, end_num = get_page_slice(usernames, page)
+    text = format_user_batch(total, chunk, start_num, end_num)
+    keyboard = build_nav_keyboard(page, total)
+
+    user_pagination[target_id] = {"usernames": usernames, "page": page}
+    client.send_message(target_id, text, reply_markup=keyboard)
+
+
+
+
+def interruptible_sleep(seconds, stop_event, step=0.5):
+    elapsed = 0.0
+    while elapsed < seconds:
+        if stop_event.is_set():
+            return True
+        time.sleep(min(step, seconds - elapsed))
+        elapsed += step
+    return stop_event.is_set()
+
+
+def chunk_list(items, batch_size):
+    for i in range(0, len(items), batch_size):
+        yield items[i : i + batch_size]
+
+
+def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None):
+    try:
+        chat_id, chat_title = resolve_chat_id(user_app, raw_group)
+        
+        if filter_type == "📊 Xabarlar orqali (Sekin)":
+            max_messages = message_count if message_count else 1000
+            # Boshlang'ich xabar
+            bot_app.send_message(
+                target_id,
+                f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {max_messages:,} ta xabar o'qiladi.",
+            )
+            
+            scraped = set()
+            msg_count = 0
+            progress_interval = max(100, max_messages // 100)  # Dynamic progress reporting
+            
+            for message in user_app.get_chat_history(chat_id, limit=max_messages):
+                if message.from_user and not message.from_user.is_bot and message.from_user.username:
+                    scraped.add(f"@{message.from_user.username}")
+                msg_count += 1
+                if msg_count % progress_interval == 0:
+                    # Progress update - edit qilish
+                    try:
+                        if target_id in last_bot_messages:
+                            bot_app.edit_message_text(
+                                target_id,
+                                last_bot_messages[target_id]["message_id"],
+                                f"� **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n� {msg_count:,}/{max_messages:,} ta xabar o'qildi...",
+                            )
+                    except:
+                        pass  # Edit qilib bo'lmadi, davom etamiz
+            
+        else:
+            # Boshlang'ich xabar
+            bot_app.send_message(
+                target_id,
+                f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ 0 ta user yig'ildi...",
+            )
+
+            scraped = set()
+            member_count = 0
+            progress_interval = 50  # Har 50 ta userdan keyin update
+            
+            for member in user_app.get_chat_members(chat_id):
+                if member.user.is_bot or not member.user.username:
+                    continue
+
+                username = f"@{member.user.username}"
+
+                if filter_type == "⚡ Avtomatik (Tez)":
+                    scraped.add(username)
+
+                elif filter_type == "👱‍♀️ Adminlar":
+                    if member.status in ("creator", "administrator"):
+                        scraped.add(username)
+
+                elif filter_type == "🌸 Qizlar (Filtrlangan)":
+                    username_lower = member.user.username.lower()
+                    
+                    # 1. Username oxiri 'a' bilan tugaganlar (raqamdan oldingi harfga qarab)
+                    # Oxirgi harfni topish (raqamlarni e'tiborsiz qoldirish)
+                    last_char = None
+                    for char in reversed(username_lower):
+                        if char.isalpha():
+                            last_char = char
+                            break
+                    
+                    if last_char == 'a':
+                        scraped.add(username)
+                    else:
+                        # 2. Tarkibida ayol ismlari bo'lganlar
+                        female_keywords = ["gul", "niso", "bibi", "khan", "xon", "begim", "oy", "mariya", "nigora", "sevara", "dilnoza", "malika", "zuhra", "nargiza", "kamola", "mavjuda", "shahnoza", "aziza", "fatima", "zaynab", "aisha", "khadija", "mukarram", "makhsuma", "zahra", "ruziya", "mubina", "salima", "habiba", "jamila", "latifa", "nafisa", "safiya", "sumaya", "ummu", "aysha", "fotima", "hafsa", "sawda", "ruqayya", "kulthum", "aliya", "amina", "asfiya", "baraka", "bushra", "dalia", "eisha", "fariha", "ghada", "haniya", "imana", "jana", "kadija", "laila", "mahira", "nadia", "omar", "parveen", "qasira", "raisa", "sana", "tahira", "umara", "wafa", "yamila", "zara", "zoya", "nur", "noor", "shams", "hilal", "badr", "najma", "sitar", "anahita", "anara", "arzu", "asal", "barakat", "bina", "bonu", "dila", "dilbara", "dildora", "dilfuza", "dilrabo", "dilshoda", "elina", "eliza", "emira", "farangiz", "farida", "feruza", "gavhar", "gulandom", "gulbahor", "gulchehra", "guldasta", "gulira", "gulnara", "gulnoza", "gulruhsora", "gulshoda", "gulsanam", "gulzara", "hadicha", "hayola", "hilola", "humora", "inobat", "kamola", "kumush", "lola", "malika", "maftuna", "makhsuma", "mavjuda", "mavzuna", "mehriniso", "mohira", "mubina", "mukarrama", "muslima", "nafisa", "nargiza", "nigora", "niso", "nodira", "noila", "nurida", "nurjahan", "nurkhon", "nurliyo", "nurshoda", "nurzoda", "parvina", "rano", "rakhima", "ramina", "ravshana", "raykhona", "roya", "roziya", "ruhida", "ruhijon", "ruziya", "sabina", "sadiya", "safina", "sahar", "saliha", "salima", "samira", "sana", "sanobar", "sarvinoz", "sevinch", "shahida", "shahnoza", "sharifa", "shirin", "shodiyona", "shukrona", "sitora", "sumayya", "surayyo", "tabassum", "tahira", "tamina", "tanzila", "tarona", "umida"]
+                        if any(keyword in username_lower for keyword in female_keywords):
+                            scraped.add(username)
+                
+                member_count += 1
+                if member_count % progress_interval == 0:
+                    # Progress update - edit qilish
+                    try:
+                        if target_id in last_bot_messages:
+                            bot_app.edit_message_text(
+                                target_id,
+                                last_bot_messages[target_id]["message_id"],
+                                f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {len(scraped)} ta user yig'ildi...",
+                            )
+                    except:
+                        pass  # Edit qilib bo'lmadi, davom etamiz
+
+        if not scraped:
+            bot_app.send_message(
+                target_id,
+                f"❌ **{chat_title}** guruhida filtr bo'yicha user topilmadi.",
+            )
+            return
+
+        existing = load_user_database(target_id)
+        existing_set = set(existing)
+        new_count = sum(1 for u in scraped if u not in existing_set)
+        all_users = existing + [u for u in sorted(scraped) if u not in existing_set]
+        save_user_database(target_id, all_users)
+
+        scraped_list = sorted(scraped, key=str.lower)
+        bot_app.send_message(
+            target_id,
+            f"✅ **{chat_title}** guruhidan **{len(scraped_list)}** ta user yig'ildi!\n"
+            f"💾 Bazaga **{new_count}** ta yangi qo'shildi (jami: **{len(all_users)}**).",
+        )
+        show_paginated_users(bot_app, target_id, scraped_list)
+
+    except Exception as e:
+        bot_app.send_message(target_id, explain_telegram_error(e))
+    finally:
+        release_task(target_id, "scrape")
+
+
+def broadcast_task(target_id, recipients, body):
+    try:
+        success = 0
+        failed = 0
+        total = len(recipients)
+        
+        bot_app.send_message(
+            target_id,
+            f"📤 **Xabar yuborish boshlandi...**\n\n"
+            f"📊 Jami: **{total}** ta user\n"
+            f"⏳ Jarayon davom etmoqda...",
+        )
+        
+        for idx, username in enumerate(recipients):
+            try:
+                user_app.send_message(username, body)
+                success += 1
+                
+                # Har 10 ta userdan keyin progress update
+                if (idx + 1) % 10 == 0:
+                    try:
+                        if target_id in last_bot_messages:
+                            bot_app.edit_message_text(
+                                target_id,
+                                last_bot_messages[target_id]["message_id"],
+                                f"📤 **Xabar yuborilmoqda...**\n\n"
+                                f"📊 Jami: **{total}** ta user\n"
+                                f"✅ Yuborildi: **{success}** ta\n"
+                                f"❌ Yuborilmadi: **{failed}** ta\n"
+                                f"⏳ Qolgan: **{total - success - failed}** ta",
+                            )
+                    except:
+                        pass  # Edit qilib bo'lmadi, davom etamiz
+                
+                time.sleep(3)
+            except FloodWait as e:
+                time.sleep(e.value + 5)
+                try:
+                    user_app.send_message(username, body)
+                    success += 1
+                except Exception:
+                    failed += 1
+            except (PeerIdInvalid, UserPrivacyRestricted, Exception):
+                failed += 1
+
+        bot_app.send_message(
+            target_id,
+            f"✅ **Xabar yuborish tugadi!**\n\n"
+            f"📤 Yuborildi: **{success}** ta\n"
+            f"❌ Yuborilmadi: **{failed}** ta\n"
+            f"📊 Jami: **{total}** ta",
+            reply_markup=main_menu(),
+        )
+    except Exception as e:
+        bot_app.send_message(target_id, explain_telegram_error(e), reply_markup=main_menu())
+    finally:
+        release_task(target_id, "broadcast")
+
+# ================= MENYU =================
+def main_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🚀 Scraper"), KeyboardButton("🔍 Guruh Qidirish")],
+            [KeyboardButton("📨 Xabar yuborish"), KeyboardButton("📁 Yig'ilgan userlar")]
+        ],
+        resize_keyboard=True,
+        placeholder="Bo'limni tanlang..."
+    )
+
+def cancel_menu():
+    return ReplyKeyboardMarkup([[KeyboardButton("❌ Bekor qilish")]], resize_keyboard=True)
+
+
+def database_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🗑️ Bazani tozalash"), KeyboardButton("🏠 Asosiy menyu")]
+        ],
+        resize_keyboard=True,
+        placeholder="Baza bo'limi..."
+    )
+
+
+
+
+def scraper_filter_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("⚡ Avtomatik (Tez)"), KeyboardButton("📊 Xabarlar orqali (Sekin)")],
+            [KeyboardButton("🌸 Qizlar (Filtrlangan)"), KeyboardButton("👱‍♀️ Adminlar")],
+            [KeyboardButton("❌ Bekor qilish")]
+        ],
+        resize_keyboard=True,
+        placeholder="Filtrni tanlang..."
+    )
+
+# ================= HANDLERLAR =================
+@bot_app.on_message(filters.command("start") & filters.private)
+def start_command(client, message):
+    user_id = message.from_user.id
+    
+    # Offline check
+    global bot_offline
+    if bot_offline:
+        return  # Offline bo'lsa, hech narsa qilmaymiz
+    
+    user_states[message.from_user.id] = "menu"
+    first_name = message.from_user.first_name or "Mijoz"
+    
+    text = (
+        f"👋 Assalomu alaykum, {first_name}!\n\n"
+        "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+        "📌 **Mavjud xizmatlar:**\n"
+        "• 🚀 Scraper — guruhlardan user yig'ish\n"
+        "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+        "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+        "Quyidagi tugmalardan birini tanlang:"
+    )
+    message.reply_text(text, reply_markup=main_menu())
+
+
+@bot_app.on_message(filters.command("shutdown") & filters.private)
+def shutdown_command(client, message):
+    """Botni offline qiladi (faqat ikkinchi admin uchun)"""
+    user_id = message.from_user.id
+    
+    if not is_second_admin(user_id):
+        message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+    
+    global bot_offline
+    bot_offline = True
+    message.reply_text("🔴 **Bot offline holatiga o'tdi.**\n\nEndi hech qanday buyruqga javob bermaydi.\nOnline qilish uchun: `/power`")
+
+
+@bot_app.on_message(filters.command("power") & filters.private)
+def power_command(client, message):
+    """Botni online qiladi (faqat ikkinchi admin uchun)"""
+    user_id = message.from_user.id
+    
+    if not is_second_admin(user_id):
+        message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+    
+    global bot_offline
+    bot_offline = False
+    message.reply_text("🟢 **Bot online holatiga o'tdi.**\n\nEndi barcha buyruqlarga javob beradi.")
+
+
+@bot_app.on_message(filters.command("admins") & filters.private)
+def admins_command(client, message):
+    """Adminlar ro'yxatini ko'rsatadi (faqat bosh admin uchun)"""
+    user_id = message.from_user.id
+    
+    # Faqat bosh admin ko'ra oladi
+    if not is_super_admin(user_id):
+        return  # Bosh admin bo'lmasa, hech narsa qilmaymiz (buyruq mavjud emasdek)
+    
+    if not ADMIN_IDS:
+        message.reply_text("❌ Hozircha adminlar yo'q.")
+        return
+    
+    # Bosh admin uchun barcha adminlarni ko'rsatadi
+    text = f"👑 **Adminlar ro'yxati:**\n\n"
+    
+    for admin_id in ADMIN_IDS:
+        if admin_id == SUPER_ADMIN_ID:
+            text += f"• {admin_id} - Bosh Admin (Siz)\n"
+        else:
+            text += f"• {admin_id} - Admin\n"
+    
+    text += f"\n• Jami: {len(ADMIN_IDS)} ta admin"
+    
+    message.reply_text(text)
+
+@bot_app.on_message(filters.private & ~filters.command("start"))
+def process_messages(client, message):
+    user_id = message.from_user.id
+    text = message.text
+
+    if not text:
+        return
+    
+    # Offline check - admin buyruqlaridan tashqari barchasini ignore qiladi
+    global bot_offline
+    if bot_offline:
+        # Faqat adminlar /power buyruqini ishlatishi mumkin
+        if text == "/power" and is_admin(user_id):
+            # Bu buyruq alohida handlerda ishlaydi
+            pass
+        else:
+            return  # Offline bo'lsa, barcha xabarlarni ignore qiladi
+
+    # Flood protection check
+    flood_message, is_blocked = check_flood(user_id)
+    if flood_message:
+        send_or_edit_message(client, user_id, flood_message)
+        if is_blocked:
+            return
+
+    if text in ["❌ Bekor qilish", "/cancel"]:
+        user_states[user_id] = "menu"
+        send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+        return
+
+
+    state = user_states.get(user_id, "menu")
+
+    if text in MENU_BUTTONS:
+        if state != "menu":
+            send_or_edit_message(client, user_id, 
+                "⚠️ Avval joriy amalni tugating yoki `❌ Bekor qilish` bosing.",
+                reply_markup=cancel_menu(),
+            )
+            return
+        active = get_active_task(user_id)
+        if active:
+            send_or_edit_message(client, user_id, active_task_message(active), reply_markup=main_menu())
+            return
+
+    if text in DATABASE_BUTTONS:
+        if text == "🗑️ Bazani tozalash":
+            file_path = get_user_file(user_id)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    send_or_edit_message(client, user_id, "✅ Bazani muvaffaqiyatli tozaladim.", reply_markup=main_menu())
+                except Exception as e:
+                    send_or_edit_message(client, user_id, f"❌ Xatolik: {e}", reply_markup=database_menu())
+            else:
+                send_or_edit_message(client, user_id, "❌ Baza allaqachon bo'sh.", reply_markup=database_menu())
+            user_states[user_id] = "menu"
+        elif text == "🏠 Asosiy menyu":
+            user_states[user_id] = "menu"
+            send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+        return
+
+    if text not in DEDUP_EXEMPT and is_duplicate_command(user_id, text):
+        send_or_edit_message(client, user_id,
+            "⚠️ Xuddi shu buyruq hozirgina yuborilgan. Biroz kuting.",
+            reply_markup=main_menu() if state == "menu" else cancel_menu(),
+        )
+        return
+
+    # ----- ASOSIY MENYU -----
+    if state == "menu":
+        if text == "🚀 Scraper":
+            user_states[user_id] = "scrape_wait_group"
+            send_or_edit_message(client, user_id,
+                "🚀 **SCRAPER (Full Olish)**\n\n"
+                "Guruh manzilini yuboring:\n"
+                "• `@guruh_username`\n"
+                "• `https://t.me/guruh_username`\n"
+                "• Yopiq guruh: `https://t.me/+invite_kodi`\n\n"
+                "⚠️ Guruh **nomi** emas, **@username** yoki **havola** yuboring!\n"
+                "User akkauntingiz guruhda bo'lishi kerak.",
+                reply_markup=cancel_menu()
+            )
+            
+        elif text == "🔍 Guruh Qidirish":
+            user_states[user_id] = "search_wait_keyword"
+            send_or_edit_message(client, user_id,
+                "🔍 **GURUH QIDIRISH**\n\nQaysi mavzuda guruh izlayapsiz? Kalit so'zni yozing:\n(Masalan: `biznes`, `kino`)",
+                reply_markup=cancel_menu()
+            )
+            
+            
+        elif text == "📨 Xabar yuborish" or text == "Xabar yuborish":
+            file_path = get_user_file(user_id)
+            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                send_or_edit_message(client, user_id,
+                    "❌ Bazangiz bo'sh. Avval `🚀 Scraper` orqali foydalanuvchi yig'ing.",
+                    reply_markup=main_menu()
+                )
+                return
+            with open(file_path, "r", encoding="utf-8") as f:
+                count = sum(1 for line in f if line.strip())
+            user_states[user_id] = "broadcast_wait_text"
+            send_or_edit_message(client, user_id,
+                f"📨 **XABAR YUBORISH**\n\n"
+                f"Bazangizda **{count}** ta foydalanuvchi bor.\n\n"
+                "Endi yuboriladigan xabar matnini yozing:\n"
+                "_(Spamdan himoya uchun har bir xabar orasida 3 soniya pauza qo'yiladi)_",
+                reply_markup=cancel_menu()
+            )
+
+        elif text == "📁 Yig'ilgan userlar":
+            usernames = load_user_database(user_id)
+            if usernames:
+                send_or_edit_message(client, user_id,
+                    f"📁 Bazangizda **{len(usernames)}** ta user bor.",
+                    reply_markup=database_menu(),
+                )
+                show_paginated_users(client, user_id, usernames)
+            else:
+                send_or_edit_message(client, user_id, "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing.")
+        else:
+            send_or_edit_message(client, user_id, "Iltimos, tugmalardan birini tanlang.", reply_markup=main_menu())
+
+    # ----- SCRAPER (FULL OLISH) -----
+    elif state == "scrape_wait_group":
+        session_err = check_user_session(user_app)
+        if session_err:
+            send_or_edit_message(client, user_id, session_err, reply_markup=main_menu())
+            user_states[user_id] = "menu"
+            return
+
+        group_input = text
+        try:
+            chat_id, chat_title = resolve_chat_id(user_app, text)
+            scraper_selections[user_id] = {"group": group_input, "chat_id": chat_id, "chat_title": chat_title}
+            user_states[user_id] = "scrape_wait_filter"
+            send_or_edit_message(client, user_id,
+                f"✅ Guruh qabul qilindi: **{chat_title}**\n\n"
+                "Endi scraping usulini tanlang:",
+                reply_markup=scraper_filter_menu(),
+            )
+        except Exception as e:
+            send_or_edit_message(client, user_id, explain_telegram_error(e), reply_markup=main_menu())
+            user_states[user_id] = "menu"
+
+    elif state == "scrape_wait_filter":
+        if text not in SCRAPER_FILTERS:
+            send_or_edit_message(client, user_id, "Iltimos, filtr tugmalaridan birini tanlang.", reply_markup=scraper_filter_menu())
+            return
+
+        selection = scraper_selections.get(user_id)
+        if not selection:
+            send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
+            user_states[user_id] = "menu"
+            return
+
+        filter_type = text
+        
+        if filter_type == "📊 Xabarlar orqali (Sekin)":
+            user_states[user_id] = "scrape_wait_message_count"
+            send_or_edit_message(client, user_id,
+                "📊 **XABARLAR SONI**\n\n"
+                "Nechta xabarni o'qishni xohlaysiz?\n"
+                "• Masalan: `1000`, `10000`, `1000000`\n\n"
+                "⚠️ Maksimal: **5,000,000** ta xabar",
+                reply_markup=cancel_menu(),
+            )
+        else:
+            ok, current = acquire_task(user_id, "scrape")
+            if not ok:
+                send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+                user_states[user_id] = "menu"
+                return
+
+            send_or_edit_message(client, user_id,
+                "⏳ Userlar yig'ilmoqda — bu biroz vaqt olishi mumkin.",
+                reply_markup=main_menu(),
+            )
+            user_states[user_id] = "menu"
+
+            threading.Thread(
+                target=scrape_task,
+                args=(user_id, selection["group"], filter_type),
+                daemon=True,
+            ).start()
+            scraper_selections.pop(user_id, None)
+
+    elif state == "scrape_wait_message_count":
+        try:
+            message_count = int(text.replace(",", "").replace(" ", ""))
+        except ValueError:
+            send_or_edit_message(client, user_id, "❌ Iltimos, raqam kiriting. Masalan: `1000`", reply_markup=cancel_menu())
+            return
+
+        if message_count < 1:
+            send_or_edit_message(client, user_id, "❌ Kamida 1 ta xabar kiritishingiz kerak.", reply_markup=cancel_menu())
+            return
+
+        if message_count > 5000000:
+            send_or_edit_message(client, user_id, "❌ Maksimal 5,000,000 ta xabar kiritish mumkin.", reply_markup=cancel_menu())
+            return
+
+        selection = scraper_selections.get(user_id)
+        if not selection:
+            send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
+            user_states[user_id] = "menu"
+            return
+
+        ok, current = acquire_task(user_id, "scrape")
+        if not ok:
+            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            user_states[user_id] = "menu"
+            return
+
+        send_or_edit_message(client, user_id,
+            f"⏳ {message_count:,} ta xabar o'qilmoqda — bu biroz vaqt olishi mumkin.",
+            reply_markup=main_menu(),
+        )
+        user_states[user_id] = "menu"
+
+        threading.Thread(
+            target=scrape_task,
+            args=(user_id, selection["group"], "📊 Xabarlar orqali (Sekin)", message_count),
+            daemon=True,
+        ).start()
+        scraper_selections.pop(user_id, None)
+
+    # ----- GURUH QIDIRISH (GLOBAL SEARCH) -----
+    elif state == "search_wait_keyword":
+        keyword = text
+        ok, current = acquire_task(user_id, "search")
+        if not ok:
+            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            user_states[user_id] = "menu"
+            return
+
+        send_or_edit_message(client, user_id,
+            f"⏳ '{keyword}' so'zi bo'yicha Telegram global tarmog'idan guruhlar axtarilmoqda..."
+        )
+
+        try:
+            result = user_app.invoke(functions.contacts.Search(q=keyword, limit=20))
+
+            found_chats = []
+            for chat in result.chats:
+                if getattr(chat, "username", None):
+                    found_chats.append(f"📌 @{chat.username} | {chat.title}")
+
+            if found_chats:
+                res_text = "🔎 **Topilgan guruhlar:**\n\n" + "\n".join(found_chats)
+                send_or_edit_message(client, user_id, res_text, reply_markup=main_menu())
+            else:
+                send_or_edit_message(client, user_id, "❌ Hech qanday guruh topilmadi.", reply_markup=main_menu())
+        except Exception as e:
+            send_or_edit_message(client, user_id, f"❌ Qidiruvda xatolik: {e}", reply_markup=main_menu())
+        finally:
+            release_task(user_id, "search")
+
+        user_states[user_id] = "menu"
+
+    # ----- XABAR YUBORISH (BROADCAST) -----
+    elif state == "broadcast_wait_text":
+        msg_text = text
+        file_path = get_user_file(user_id)
+        user_states[user_id] = "menu"
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            usernames = [line.strip() for line in f if line.strip()]
+
+        if not usernames:
+            send_or_edit_message(client, user_id, "❌ Bazada foydalanuvchi yo'q.", reply_markup=main_menu())
+            return
+
+        ok, current = acquire_task(user_id, "broadcast")
+        if not ok:
+            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            return
+
+        send_or_edit_message(client, user_id,
+            f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
+            "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
+            reply_markup=main_menu(),
+        )
+
+        threading.Thread(
+            target=broadcast_task,
+            args=(user_id, usernames, msg_text),
+            daemon=True,
+        ).start()
+
+
+
+@bot_app.on_callback_query(filters.regex("^pg:"))
+def pagination_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    action = callback_query.data.split(":")[1]
+
+    now = time.time()
+    with tasks_lock:
+        last_click = pagination_cooldown.get(user_id, 0)
+        if now - last_click < PAGINATION_COOLDOWN:
+            callback_query.answer("Juda tez bosyapsiz. Biroz kuting.")
+            return
+        pagination_cooldown[user_id] = now
+
+    pag = user_pagination.get(user_id)
+    if not pag:
+        callback_query.answer("Ro'yxat topilmadi. Qayta oching.", show_alert=True)
+        return
+
+    usernames = pag["usernames"]
+    page = pag["page"]
+    total = len(usernames)
+    total_pages = get_total_pages(total)
+
+    if action == "close":
+        user_pagination.pop(user_id, None)
+        callback_query.message.delete()
+        callback_query.answer("Yopildi")
+        return
+
+    if action == "prev" and page > 0:
+        page -= 1
+    elif action == "next" and page < total_pages - 1:
+        page += 1
+    else:
+        callback_query.answer()
+        return
+
+    pag["page"] = page
+    chunk, start_num, end_num = get_page_slice(usernames, page)
+    text = format_user_batch(total, chunk, start_num, end_num)
+    keyboard = build_nav_keyboard(page, total)
+
+    callback_query.message.edit_text(text, reply_markup=keyboard)
+    callback_query.answer()
+
+
+def reset_user_session():
+    for name in (
+        "user_session.session",
+        "user_session.session-journal",
+        "empire_bot_session.session",
+        "empire_bot_session.session-journal",
+    ):
+        path = os.path.join(BASE_DIR, name)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except PermissionError:
+                print(f"⚠️ {name} hozir band. Botni to'xtatib, qo'lda o'chiring.")
+
+
+async def start_user_client():
+    user_session_path = os.path.join(BASE_DIR, "user_session.session")
+    if not os.path.exists(user_session_path):
+        print("\n📱 User sessiya yo'q.")
+        print("Scraper uchun terminalda +998... telefon raqamingizni kiriting.\n")
+
+    try:
+        await user_app.start()
+        print("✅ User sessiya muvaffaqiyatli ulandi.\n")
+    except UserDeactivated:
+        print("\n⚠️ Telegram user akkauntingiz bloklangan yoki o'chirilgan!")
+        try:
+            await user_app.stop()
+        except Exception:
+            pass
+        reset_user_session()
+        print("Eski sessiya o'chirildi.")
+        print("Botni qayta ishga tushiring va YANGI +998... raqam kiriting.")
+        print("Hozir bot ishlaydi, lekin Scraper ishlamaydi.\n")
+    except Exception as e:
+        if "USER_DEACTIVATED" in str(e):
+            try:
+                await user_app.stop()
+            except Exception:
+                pass
+            reset_user_session()
+            print("\n⚠️ User sessiya yaroqsiz. Qayta kirish kerak.\n")
+        else:
+            print(f"\n⚠️ User sessiya ulanmadi: {e}\n")
+
+
+async def run_bot():
+    try:
+        await bot_app.start()
+    except UserDeactivated:
+        print("\n⚠️ Bot sessiyasi yaroqsiz. Eski sessiya o'chirilmoqda...")
+        try:
+            await bot_app.stop()
+        except Exception:
+            pass
+        reset_user_session()
+        await bot_app.start()
+
+    asyncio.create_task(start_user_client())
+
+    try:
+        await idle()
+    finally:
+        await bot_app.stop()
+        if user_app.is_connected:
+            await user_app.stop()
+
+
+if __name__ == "__main__":
+    print("====================================")
+    print(" EMPIRE BOT SERVER ISHGA TUSHIRILDI ")
+    print("====================================")
+    bot_app.run(run_bot())
