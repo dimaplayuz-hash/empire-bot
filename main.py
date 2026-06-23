@@ -206,7 +206,18 @@ def get_user_client_started(user_id):
 def is_user_logged_in(user_id):
     """User login qilganmi tekshirish"""
     session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-    return os.path.exists(session_file)
+    if not os.path.exists(session_file):
+        return False
+    
+    # Session fayli bor lekin client start qilib bo'lishi kerak
+    try:
+        client = get_user_client(user_id)
+        if not client.is_connected:
+            client.connect()
+        me = client.get_me()
+        return not me.is_bot
+    except:
+        return False
 
 # ================= ADMINLIK TIZIMI =================
 # Adminlar ro'yxati (ID lar)
