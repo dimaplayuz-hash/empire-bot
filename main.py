@@ -881,7 +881,10 @@ def handle_login_code(client, message, user_id, text):
             text.strip()
         )
         
-        # Muvaffaqiyatli login
+        # Muvaffaqiyatli login - clientni user_clients ga qo'shish
+        with clients_lock:
+            user_clients[user_id] = user_client
+        
         del login_data[user_id]
         user_states[user_id] = "menu"
         
@@ -951,7 +954,10 @@ def handle_login_password(client, message, user_id, text):
             password=text.strip()
         )
         
-        # Muvaffaqiyatli login
+        # Muvaffaqiyatli login - clientni user_clients ga qo'shish
+        with clients_lock:
+            user_clients[user_id] = user_client
+        
         del login_data[user_id]
         user_states[user_id] = "menu"
         
