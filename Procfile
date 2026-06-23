@@ -1,1 +1,1 @@
-worker: python timer_userbot.py
+worker: python main.py
