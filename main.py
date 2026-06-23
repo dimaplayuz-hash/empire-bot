@@ -5,6 +5,7 @@ import json
 import asyncio
 import threading
 import sys
+import shutil
 
 # Python 3.14 compatibility fix
 if sys.version_info >= (3, 14):
@@ -849,21 +850,24 @@ def handle_login_phone(client, message, user_id, text):
     
     # Client yaratish va kod so'rash
     try:
-        # Sessionni o'chirish (agar bor bo'lsa)
-        session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-        session_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+        # Vaqtinchalik session nomi ishlatish
+        temp_session_name = f"sessions/temp_login_{user_id}"
+        final_session_name = f"sessions/user_{user_id}"
         
-        for file_path in [session_file, session_journal]:
+        # Vaqtinchalik session fayllarini o'chirish
+        temp_session = os.path.join(BASE_DIR, f"temp_login_{user_id}.session")
+        temp_journal = os.path.join(BASE_DIR, f"temp_login_{user_id}.session-journal")
+        
+        for file_path in [temp_session, temp_journal]:
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                 except:
                     pass
         
-        # Har safar yangi client yaratish (get_user_client ishlatmaslik)
-        session_name = f"sessions/user_{user_id}"
+        # Vaqtinchalik client yaratish
         user_client = Client(
-            session_name,
+            temp_session_name,
             api_id=config["API_ID"],
             api_hash=config["API_HASH"],
             workdir=BASE_DIR,
@@ -877,7 +881,9 @@ def handle_login_phone(client, message, user_id, text):
         login_data[user_id] = {
             "phone": phone,
             "phone_code_hash": sent_code.phone_code_hash,
-            "client": user_client
+            "client": user_client,
+            "temp_session": temp_session_name,
+            "final_session": final_session_name
         }
         
         user_states[user_id] = "login_code"
@@ -912,6 +918,20 @@ def handle_login_code(client, message, user_id, text):
             data["phone_code_hash"],
             text.strip()
         )
+        
+        # Session faylini vaqtinchalik nomdan asl nomga o'zgartirish
+        temp_session = os.path.join(BASE_DIR, f"temp_login_{user_id}.session")
+        temp_journal = os.path.join(BASE_DIR, f"temp_login_{user_id}.session-journal")
+        final_session = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+        final_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+        
+        try:
+            if os.path.exists(temp_session):
+                shutil.move(temp_session, final_session)
+            if os.path.exists(temp_journal):
+                shutil.move(temp_journal, final_journal)
+        except:
+            pass
         
         # Muvaffaqiyatli login - clientni user_clients ga qo'shish
         with clients_lock:
@@ -948,9 +968,14 @@ def handle_login_code(client, message, user_id, text):
                 user_client = login_data[user_id]["client"]
                 if user_client.is_connected:
                     user_client.disconnect()
-                session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-                if os.path.exists(session_file):
-                    os.remove(session_file)
+                temp_session = os.path.join(BASE_DIR, f"temp_login_{user_id}.session")
+                temp_journal = os.path.join(BASE_DIR, f"temp_login_{user_id}.session-journal")
+                for file_path in [temp_session, temp_journal]:
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                        except:
+                            pass
             except:
                 pass
             del login_data[user_id]
@@ -985,6 +1010,20 @@ def handle_login_password(client, message, user_id, text):
             data["phone"],
             password=text.strip()
         )
+        
+        # Session faylini vaqtinchalik nomdan asl nomga o'zgartirish
+        temp_session = os.path.join(BASE_DIR, f"temp_login_{user_id}.session")
+        temp_journal = os.path.join(BASE_DIR, f"temp_login_{user_id}.session-journal")
+        final_session = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+        final_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+        
+        try:
+            if os.path.exists(temp_session):
+                shutil.move(temp_session, final_session)
+            if os.path.exists(temp_journal):
+                shutil.move(temp_journal, final_journal)
+        except:
+            pass
         
         # Muvaffaqiyatli login - clientni user_clients ga qo'shish
         with clients_lock:
