@@ -4,6 +4,12 @@ import time
 import json
 import asyncio
 import threading
+import sys
+
+# Python 3.14 compatibility fix
+if sys.version_info >= (3, 14):
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
 from pyrogram import Client, filters
 from pyrogram.types import (
     ReplyKeyboardMarkup,
