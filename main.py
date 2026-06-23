@@ -713,26 +713,11 @@ def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
-        user_states[user_id] = "login_upload"
+        user_states[user_id] = "login_phone"
         text = (
-            "🔐 **Session faylini yuboring**\n\n"
-            "Botdan foydalanish uchun Telegram session faylingizni yuboring.\n\n"
-            "📱 **Session faylini qanday olish:**\n"
-            "1. Quyidagi Python scriptni kompyuteringizda yuring:\n"
-            "2. Script sizga `my_account.session` faylini beradi\n"
-            "3. Shu faylni shu yerga yuboring\n\n"
-            "📜 **Python script:**\n"
-            "```python\n"
-            "from pyrogram import Client\n"
-            "\n"
-            "api_id = YOUR_API_ID\n"
-            "api_hash = 'YOUR_API_HASH'\n"
-            "\n"
-            "app = Client('my_account', api_id=api_id, api_hash=api_hash)\n"
-            "app.start()\n"
-            "print('Session fayli yaratildi!')\n"
-            "app.stop()\n"
-            "```\n\n"
+            "🔐 **Telefon raqamingizni kiriting**\n\n"
+            "Botdan foydalanish uchun Telegram akkauntingizga ulanishingiz kerak.\n\n"
+            "Format: `+998901234567`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
         message.reply_text(text)
@@ -821,65 +806,201 @@ def admins_command(client, message):
 
 
 # Login flow handlers
-async def handle_login_upload(client, message, user_id):
-    """Session faylini qabul qilish"""
-    if message.document:
-        try:
-            # Faylni yuklab olish
-            file = message.document
-            file_path = await client.download_media(file, file_name=f"sessions/user_{user_id}.session")
-            
-            # Faylni SESSIONS_DIR ga ko'chirish
-            final_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-            shutil.move(file_path, final_path)
-            
-            # Client yaratish va tekshirish
-            session_name = f"sessions/user_{user_id}"
-            user_client = Client(
-                session_name,
-                api_id=config["API_ID"],
-                api_hash=config["API_HASH"],
-                workdir=BASE_DIR,
-            )
-            
-            # Clientni connect qilish
-            user_client.connect()
-            
-            # Tekshirish - bot emasligini
-            me = user_client.get_me()
-            if me.is_bot:
-                message.reply_text("❌ Bu bot session fayli. User session faylini yuboring.")
-                os.remove(final_path)
-                return
-            
-            # Muvaffaqiyatli
-            with clients_lock:
-                user_clients[user_id] = user_client
-            
-            if user_id in login_data:
-                del login_data[user_id]
-            user_states[user_id] = "menu"
-            
-            first_name = message.from_user.first_name or "Mijoz"
+def handle_login_phone(client, message, user_id, text):
+    """Telefon raqamni qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    # Telefon raqam formatini tekshirish
+    phone = text.strip().replace(" ", "").replace("-", "")
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    
+    # Oddiy tekshirish
+    if len(phone) < 10 or not phone.replace("+", "").isdigit():
+        message.reply_text("❌ Noto'g'ri telefon raqam formati.\n\nFormat: `+998901234567`")
+        return
+    
+    # Sessionni o'chirish (agar bor bo'lsa)
+    session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+    session_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+    
+    for file_path in [session_file, session_journal]:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+    
+    # user_clients dictidan ham o'chirish
+    with clients_lock:
+        if user_id in user_clients:
+            try:
+                if user_clients[user_id].is_connected:
+                    user_clients[user_id].disconnect()
+            except:
+                pass
+            del user_clients[user_id]
+    
+    # Client yaratish va kod so'rash
+    try:
+        session_name = f"sessions/user_{user_id}"
+        user_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+        
+        # Connect qilish
+        user_client.connect()
+        
+        # Kod so'rash
+        sent_code = user_client.send_code(phone)
+        login_data[user_id] = {
+            "phone": phone,
+            "phone_code_hash": sent_code.phone_code_hash,
+            "client": user_client
+        }
+        
+        user_states[user_id] = "login_code"
+        message.reply_text(
+            "🔐 **Tasdiqlash kodini kiriting**\n\n"
+            "Telegram app yoki SMS orqali kelgan kodni kiriting.\n\n"
+            "❌ Bekor qilish uchun: /cancel"
+        )
+    except Exception as e:
+        message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
+
+
+def handle_login_code(client, message, user_id, text):
+    """Tasdiqlash kodini qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    if user_id not in login_data:
+        message.reply_text("❌ Xatolik. Qaytadan boshlang (/start)")
+        user_states[user_id] = "menu"
+        return
+    
+    try:
+        data = login_data[user_id]
+        user_client = data["client"]
+        
+        # Kod bilan sign in
+        user_client.sign_in(
+            data["phone"],
+            data["phone_code_hash"],
+            text.strip()
+        )
+        
+        # Muvaffaqiyatli login - clientni user_clients ga qo'shish
+        with clients_lock:
+            user_clients[user_id] = user_client
+        
+        del login_data[user_id]
+        user_states[user_id] = "menu"
+        
+        first_name = message.from_user.first_name or "Mijoz"
+        message.reply_text(
+            f"✅ **Muvaffaqiyatli ulandi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            "📌 **Mavjud xizmatlar:**\n"
+            "• 🚀 Scraper — guruhlardan user yig'ish\n"
+            "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            "Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        error_str = str(e)
+        if "SESSION_PASSWORD_NEEDED" in error_str or "Two-step verification" in error_str:
+            user_states[user_id] = "login_password"
             message.reply_text(
-                f"✅ **Muvaffaqiyatli ulandi!**\n\n"
-                f"👋 Assalomu alaykum, {first_name}!\n\n"
-                "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
-                "📌 **Mavjud xizmatlar:**\n"
-                "• 🚀 Scraper — guruhlardan user yig'ish\n"
-                "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
-                "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
-                "Quyidagi tugmalardan birini tanlang:",
-                reply_markup=main_menu()
+                "🔐 **2FA parolni kiriting**\n\n"
+                "Sizning akkauntingizda ikki bosqichli himoya yoqilgan.\n"
+                "Telegram parolingizni kiriting.\n\n"
+                "❌ Bekor qilish uchun: /cancel"
             )
-        except Exception as e:
-            message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
-    else:
-        message.reply_text("❌ Iltimos, session faylini yuboring.")
+        elif "PHONE_CODE_EXPIRED" in error_str or "PHONE_CODE_INVALID" in error_str:
+            # Sessionni tozalash
+            try:
+                user_client = login_data[user_id]["client"]
+                if user_client.is_connected:
+                    user_client.disconnect()
+                session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+                session_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+                for file_path in [session_file, session_journal]:
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                        except:
+                            pass
+            except:
+                pass
+            del login_data[user_id]
+            user_states[user_id] = "login_phone"
+            message.reply_text(
+                "❌ **Kod muddati tugagan yoki noto'g'ri.**\n\n"
+                "Qaytadan telefon raqam kiriting:\n"
+                "Format: `+998901234567`"
+            )
+        else:
+            message.reply_text(f"❌ Xatolik: {str(e)}\n\nKodni tekshiring va qaytadan urinib ko'ring.")
+
+
+def handle_login_password(client, message, user_id, text):
+    """2FA parolni qabul qilish"""
+    if text == "❌ Bekor qilish":
+        user_states[user_id] = "menu"
+        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        return
+    
+    if user_id not in login_data:
+        message.reply_text("❌ Xatolik. Qaytadan boshlang (/start)")
+        user_states[user_id] = "menu"
+        return
+    
+    try:
+        data = login_data[user_id]
+        user_client = data["client"]
+        
+        # Parol bilan sign in
+        user_client.sign_in(
+            data["phone"],
+            password=text.strip()
+        )
+        
+        # Muvaffaqiyatli login - clientni user_clients ga qo'shish
+        with clients_lock:
+            user_clients[user_id] = user_client
+        
+        del login_data[user_id]
+        user_states[user_id] = "menu"
+        
+        first_name = message.from_user.first_name or "Mijoz"
+        message.reply_text(
+            f"✅ **Muvaffaqiyatli ulandi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            "📌 **Mavjud xizmatlar:**\n"
+            "• 🚀 Scraper — guruhlardan user yig'ish\n"
+            "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            "Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        message.reply_text(f"❌ Xatolik: {str(e)}\n\nParolni tekshiring va qaytadan urinib ko'ring.")
 
 
 @bot_app.on_message(filters.private & ~filters.command(["start", "shutdown", "power", "admins", "cancel"]))
-async def process_messages(client, message):
+def process_messages(client, message):
     user_id = message.from_user.id
     text = message.text
 
@@ -888,11 +1009,16 @@ async def process_messages(client, message):
     
     # Login flow
     state = user_states.get(user_id)
-    if state == "login_upload":
-        if message.document:
-            await handle_login_upload(client, message, user_id)
-        else:
-            message.reply_text("❌ Iltimos, session faylini yuboring.")
+    if state == "login_phone":
+        handle_login_phone(client, message, user_id, text)
+        return
+    
+    if state == "login_code":
+        handle_login_code(client, message, user_id, text)
+        return
+    
+    if state == "login_password":
+        handle_login_password(client, message, user_id, text)
         return
     
     # Offline check - admin buyruqlaridan tashqari barchasini ignore qiladi
