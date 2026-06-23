@@ -836,7 +836,7 @@ def handle_login_phone(client, message, user_id, text):
     try:
         user_client = get_user_client(user_id)
         
-        # Clientni connect qilish (faqat connected bo'lmasa)
+        # Connect qilish (faqat connected bo'lmasa)
         if not user_client.is_connected:
             user_client.connect()
         
