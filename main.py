@@ -80,6 +80,7 @@ bot_app = Client(
     api_hash=config["API_HASH"],
     bot_token=config["BOT_TOKEN"],
     workdir=BASE_DIR,
+    in_memory=True,  # Sessionni memoryda saqlash
 )
 
 # ================= YORDAMCHI FUNKSIYALAR =================
