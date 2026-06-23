@@ -1238,8 +1238,10 @@ def reset_user_session():
 
 
 async def run_bot():
+    print("🚀 Botni ishga tushirish...")
     try:
         await bot_app.start()
+        print("✅ Bot muvaffaqiyatli ishga tushdi!")
     except FloodWait as e:
         print(f"\n⚠️ FloodWait: {e.value} sekund kutish kerak...")
         await asyncio.sleep(e.value)
@@ -1252,6 +1254,9 @@ async def run_bot():
             pass
         reset_user_session()
         await bot_app.start()
+    except Exception as e:
+        print(f"❌ Bot ishga tushirishda xatolik: {e}")
+        raise
 
     try:
         await idle()
