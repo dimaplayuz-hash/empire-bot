@@ -75,6 +75,8 @@ async def countdown_timer():
 async def main():
     """Asosiy funksiya"""
     print("🚀 Timer Userbotni ishga tushirish...")
+    print(f"📊 Kanal ID: {CHANNEL_ID}")
+    print(f"⏰ Taymer: {TOTAL_SECONDS} sekund")
     
     try:
         await app.start()
@@ -87,6 +89,8 @@ async def main():
         print("\n⚠️ Userbot to'xtatildi")
     except Exception as e:
         print(f"❌ Xatolik: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         await app.stop()
         print("👋 Userbot to'xtatildi")
