@@ -836,12 +836,9 @@ def handle_login_phone(client, message, user_id, text):
     try:
         user_client = get_user_client(user_id)
         
-        # Clientni disconnect qilib qayta connect qilish
-        if user_client.is_connected:
-            user_client.disconnect()
-        
-        # Connect qilish
-        user_client.connect()
+        # Clientni connect qilish (faqat connected bo'lmasa)
+        if not user_client.is_connected:
+            user_client.connect()
         
         # Kod so'rash
         sent_code = user_client.send_code(phone)
