@@ -910,6 +910,24 @@ def handle_login_code(client, message, user_id, text):
                 "Telegram parolingizni kiriting.\n\n"
                 "❌ Bekor qilish uchun: /cancel"
             )
+        elif "PHONE_CODE_EXPIRED" in error_str or "PHONE_CODE_INVALID" in error_str:
+            # Sessionni tozalash
+            try:
+                user_client = login_data[user_id]["client"]
+                if user_client.is_connected:
+                    user_client.disconnect()
+                session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+                if os.path.exists(session_file):
+                    os.remove(session_file)
+            except:
+                pass
+            del login_data[user_id]
+            user_states[user_id] = "login_phone"
+            message.reply_text(
+                "❌ **Kod muddati tugagan yoki noto'g'ri.**\n\n"
+                "Qaytadan telefon raqam kiriting:\n"
+                "Format: `+998901234567`"
+            )
         else:
             message.reply_text(f"❌ Xatolik: {str(e)}\n\nKodni tekshiring va qaytadan urinib ko'ring.")
 
