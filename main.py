@@ -193,6 +193,16 @@ def get_user_client(user_id):
         user_clients[user_id] = client
         return client
 
+def get_user_client_started(user_id):
+    """User uchun client olish va start qilish"""
+    client = get_user_client(user_id)
+    if not client.is_connected:
+        try:
+            client.start()
+        except:
+            pass  # Login paytida start qilinadi
+    return client
+
 def is_user_logged_in(user_id):
     """User login qilganmi tekshirish"""
     session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
@@ -478,7 +488,7 @@ def chunk_list(items, batch_size):
 
 def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None):
     try:
-        user_client = get_user_client(target_id)
+        user_client = get_user_client_started(target_id)
         chat_id, chat_title = resolve_chat_id(user_client, raw_group)
         
         if filter_type == "📊 Xabarlar orqali (Sekin)":
@@ -594,7 +604,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
 
 def broadcast_task(target_id, recipients, body):
     try:
-        user_client = get_user_client(target_id)
+        user_client = get_user_client_started(target_id)
         success = 0
         failed = 0
         total = len(recipients)
@@ -1069,7 +1079,7 @@ def process_messages(client, message):
     elif state == "scrape_wait_group":
         group_input = text
         try:
-            user_client = get_user_client(user_id)
+            user_client = get_user_client_started(user_id)
             chat_id, chat_title = resolve_chat_id(user_client, text)
             scraper_selections[user_id] = {"group": group_input, "chat_id": chat_id, "chat_title": chat_title}
             user_states[user_id] = "scrape_wait_filter"
@@ -1178,7 +1188,7 @@ def process_messages(client, message):
         )
 
         try:
-            user_client = get_user_client(user_id)
+            user_client = get_user_client_started(user_id)
             result = user_client.invoke(functions.contacts.Search(q=keyword, limit=20))
 
             found_chats = []
