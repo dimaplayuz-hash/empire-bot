@@ -4,6 +4,7 @@
 
 # Environment variables
 .env
+config.json
 
 # Database
 database/

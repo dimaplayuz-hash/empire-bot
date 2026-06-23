@@ -30,6 +30,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 def load_config():
+    # Environment variables (Railway.app uchun)
+    api_id = os.getenv("API_ID")
+    api_hash = os.getenv("API_HASH")
+    bot_token = os.getenv("BOT_TOKEN")
+    
+    if api_id and api_hash and bot_token:
+        return {
+            "API_ID": int(api_id),
+            "API_HASH": api_hash,
+            "BOT_TOKEN": bot_token
+        }
+    
+    # Local development uchun config.json
     parent_config = os.path.join(os.path.dirname(BASE_DIR), "config.json")
     if not os.path.exists(CONFIG_FILE) and os.path.exists(parent_config):
         with open(parent_config, "r", encoding="utf-8") as f:
