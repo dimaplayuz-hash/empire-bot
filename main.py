@@ -855,7 +855,8 @@ async def handle_login_upload(client, message, user_id):
             with clients_lock:
                 user_clients[user_id] = user_client
             
-            del login_data.get(user_id, {})
+            if user_id in login_data:
+                del login_data[user_id]
             user_states[user_id] = "menu"
             
             first_name = message.from_user.first_name or "Mijoz"
