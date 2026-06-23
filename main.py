@@ -851,11 +851,14 @@ def handle_login_phone(client, message, user_id, text):
     try:
         # Sessionni o'chirish (agar bor bo'lsa)
         session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-        if os.path.exists(session_file):
-            try:
-                os.remove(session_file)
-            except:
-                pass
+        session_journal = os.path.join(SESSIONS_DIR, f"user_{user_id}.session-journal")
+        
+        for file_path in [session_file, session_journal]:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
         
         # Har safar yangi client yaratish (get_user_client ishlatmaslik)
         session_name = f"sessions/user_{user_id}"
