@@ -825,6 +825,10 @@ def handle_login_phone(client, message, user_id, text):
     try:
         user_client = get_user_client(user_id)
         
+        # Clientni start qilish
+        if not user_client.is_connected:
+            user_client.start()
+        
         # Kod so'rash
         sent_code = user_client.send_code(phone)
         login_data[user_id] = {
