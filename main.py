@@ -730,6 +730,16 @@ def start_command(client, message):
             except:
                 pass
         
+        # user_clients dictidan ham o'chirish
+        with clients_lock:
+            if user_id in user_clients:
+                try:
+                    if user_clients[user_id].is_connected:
+                        user_clients[user_id].disconnect()
+                except:
+                    pass
+                del user_clients[user_id]
+        
         user_states[user_id] = "login_phone"
         text = (
             "🔐 **Telefon raqamingizni kiriting**\n\n"
