@@ -722,6 +722,14 @@ def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
+        # Sessionni o'chirish (agar bor bo'lsa va invalid bo'lsa)
+        session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+        if os.path.exists(session_file):
+            try:
+                os.remove(session_file)
+            except:
+                pass
+        
         user_states[user_id] = "login_phone"
         text = (
             "🔐 **Telefon raqamingizni kiriting**\n\n"
@@ -834,25 +842,11 @@ def handle_login_phone(client, message, user_id, text):
     
     # Client yaratish va kod so'rash
     try:
-        # Sessionni o'chirish (agar bor bo'lsa)
-        session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-        if os.path.exists(session_file):
-            try:
-                os.remove(session_file)
-            except:
-                pass
+        user_client = get_user_client(user_id)
         
-        # Har safar yangi client yaratish
-        session_name = f"sessions/user_{user_id}"
-        user_client = Client(
-            session_name,
-            api_id=config["API_ID"],
-            api_hash=config["API_HASH"],
-            workdir=BASE_DIR,
-        )
-        
-        # Connect qilish
-        user_client.connect()
+        # Connect qilish (faqat connected bo'lmasa)
+        if not user_client.is_connected:
+            user_client.connect()
         
         # Kod so'rash
         sent_code = user_client.send_code(phone)
