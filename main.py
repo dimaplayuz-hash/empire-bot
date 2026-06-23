@@ -198,9 +198,9 @@ def get_user_client_started(user_id):
     client = get_user_client(user_id)
     if not client.is_connected:
         try:
-            client.connect()
+            client.start()
         except:
-            pass  # Login paytida connect qilinadi
+            pass  # Login paytida start qilinadi
     return client
 
 def is_user_logged_in(user_id):
@@ -825,11 +825,7 @@ def handle_login_phone(client, message, user_id, text):
     try:
         user_client = get_user_client(user_id)
         
-        # Clientni connect qilish
-        if not user_client.is_connected:
-            user_client.connect()
-        
-        # Kod so'rash
+        # Kod so'rash (Pyrogram o'zi connect qiladi)
         sent_code = user_client.send_code(phone)
         login_data[user_id] = {
             "phone": phone,
