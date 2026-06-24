@@ -115,7 +115,7 @@ def parse_group_input(raw: str):
     return text
 
 
-def resolve_chat_id(client, raw: str):
+async def resolve_chat_id(client, raw: str):
     """Guruhni topadi; invite link bo'lsa avval qo'shiladi."""
     target = parse_group_input(raw)
     if not target:
@@ -123,12 +123,12 @@ def resolve_chat_id(client, raw: str):
 
     if isinstance(target, str) and target.startswith("https://t.me/+"):
         try:
-            chat = client.join_chat(target)
+            chat = await client.join_chat(target)
         except UserAlreadyParticipant:
-            chat = client.get_chat(target)
+            chat = await client.get_chat(target)
         return chat.id, chat.title or "Guruh"
 
-    chat = client.get_chat(target)
+    chat = await client.get_chat(target)
     return chat.id, chat.title or str(target)
 
 
@@ -198,12 +198,12 @@ def get_user_client(user_id):
         user_clients[user_id] = client
         return client
 
-def get_user_client_started(user_id):
+async def get_user_client_started(user_id):
     """User uchun client olish va start qilish"""
     client = get_user_client(user_id)
     if not client.is_connected:
         try:
-            client.start()
+            await client.start()
         except:
             pass  # Login paytida start qilinadi
     return client
@@ -542,10 +542,10 @@ def chunk_list(items, batch_size):
         yield items[i : i + batch_size]
 
 
-def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None):
+async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None):
     try:
-        user_client = get_user_client_started(target_id)
-        chat_id, chat_title = resolve_chat_id(user_client, raw_group)
+        user_client = await get_user_client_started(target_id)
+        chat_id, chat_title = await resolve_chat_id(user_client, raw_group)
         
         if filter_type == "📊 Xabarlar orqali (Sekin)":
             max_messages = message_count if message_count else 1000
@@ -559,7 +559,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
             msg_count = 0
             progress_interval = max(100, max_messages // 100)  # Dynamic progress reporting
             
-            for message in user_client.get_chat_history(chat_id, limit=max_messages):
+            async for message in user_client.get_chat_history(chat_id, limit=max_messages):
                 if message.from_user and not message.from_user.is_bot and message.from_user.username:
                     scraped.add(f"@{message.from_user.username}")
                 msg_count += 1
@@ -586,7 +586,7 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
             member_count = 0
             progress_interval = 50  # Har 50 ta userdan keyin update
             
-            for member in user_client.get_chat_members(chat_id):
+            async for member in user_client.get_chat_members(chat_id):
                 if member.user.is_bot or not member.user.username:
                     continue
 
@@ -658,9 +658,9 @@ def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message
         release_task(target_id, "scrape")
 
 
-def broadcast_task(target_id, recipients, body):
+async def broadcast_task(target_id, recipients, body):
     try:
-        user_client = get_user_client_started(target_id)
+        user_client = await get_user_client_started(target_id)
         success = 0
         failed = 0
         total = len(recipients)
@@ -674,7 +674,7 @@ def broadcast_task(target_id, recipients, body):
         
         for idx, username in enumerate(recipients):
             try:
-                user_client.send_message(username, body)
+                await user_client.send_message(username, body)
                 success += 1
                 
                 # Har 10 ta userdan keyin progress update
@@ -693,11 +693,11 @@ def broadcast_task(target_id, recipients, body):
                     except:
                         pass  # Edit qilib bo'lmadi, davom etamiz
                 
-                time.sleep(3)
+                await asyncio.sleep(3)
             except FloodWait as e:
                 time.sleep(e.value + 5)
                 try:
-                    user_client.send_message(username, body)
+                    await user_client.send_message(username, body)
                     success += 1
                 except Exception:
                     failed += 1
@@ -899,10 +899,10 @@ async def handle_login_upload(client, message, user_id):
             )
             
             # Clientni connect qilish
-            user_client.connect()
+            await user_client.connect()
             
             # Tekshirish - bot emasligini
-            me = user_client.get_me()
+            me = await user_client.get_me()
             if me.is_bot:
                 await message.reply_text("❌ Bu bot session fayli. User session faylini yuboring.")
                 os.remove(final_path)
@@ -1417,11 +1417,7 @@ async def process_messages(client, message):
             )
             user_states[user_id] = "menu"
 
-            threading.Thread(
-                target=scrape_task,
-                args=(user_id, selection["group"], filter_type),
-                daemon=True,
-            ).start()
+            asyncio.create_task(scrape_task(user_id, selection["group"], filter_type))
             scraper_selections.pop(user_id, None)
 
     elif state == "scrape_wait_message_count":
@@ -1457,11 +1453,7 @@ async def process_messages(client, message):
         )
         user_states[user_id] = "menu"
 
-        threading.Thread(
-            target=scrape_task,
-            args=(user_id, selection["group"], "📊 Xabarlar orqali (Sekin)", message_count),
-            daemon=True,
-        ).start()
+        asyncio.create_task(scrape_task(user_id, selection["group"], "📊 Xabarlar orqali (Sekin)", message_count))
         scraper_selections.pop(user_id, None)
 
     # ----- GURUH QIDIRISH (GLOBAL SEARCH) -----
@@ -1478,8 +1470,8 @@ async def process_messages(client, message):
         )
 
         try:
-            user_client = get_user_client_started(user_id)
-            result = user_client.invoke(functions.contacts.Search(q=keyword, limit=20))
+            user_client = await get_user_client_started(user_id)
+            result = await user_client.invoke(functions.contacts.Search(q=keyword, limit=20))
 
             found_chats = []
             for chat in result.chats:
@@ -1522,11 +1514,7 @@ async def process_messages(client, message):
             reply_markup=main_menu(),
         )
 
-        threading.Thread(
-            target=broadcast_task,
-            args=(user_id, usernames, msg_text),
-            daemon=True,
-        ).start()
+        asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
 
 
 
