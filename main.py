@@ -73,15 +73,8 @@ def load_config():
 
 config = load_config()
 
-# 1. BOT KLIYENTI (Tugmalar va boshqaruv uchun)
-bot_app = Client(
-    "empire_bot_session",
-    api_id=config["API_ID"],
-    api_hash=config["API_HASH"],
-    bot_token=config["BOT_TOKEN"],
-    workdir=BASE_DIR,
-    in_memory=True,  # Sessionni memoryda saqlash
-)
+# 1. BOT KLIYENTI - run_bot() ichida yaratiladi (Windows asyncio fix)
+bot_app = None  # Global referens, run_bot() da to'ldiriladi
 
 # ================= YORDAMCHI FUNKSIYALAR =================
 def parse_group_input(raw: str):
@@ -1580,6 +1573,16 @@ def reset_user_session():
 
 
 async def run_bot():
+    global bot_app
+    # Client shu yerda yaratiladi — asyncio.run() loop ichida, Windows uchun xavfsiz
+    bot_app = Client(
+        "empire_bot_session",
+        api_id=config["API_ID"],
+        api_hash=config["API_HASH"],
+        bot_token=config["BOT_TOKEN"],
+        workdir=BASE_DIR,
+        in_memory=True,
+    )
     print("🚀 Botni ishga tushirish...")
     try:
         await bot_app.start()
@@ -1603,7 +1606,10 @@ async def run_bot():
     try:
         await idle()
     finally:
-        await bot_app.stop()
+        try:
+            await bot_app.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
