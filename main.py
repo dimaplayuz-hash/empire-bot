@@ -166,6 +166,7 @@ def explain_telegram_error(error: Exception) -> str:
 user_states = {}
 user_pagination = {}
 temp_add_users = {}
+temp_broadcast_count = {}
 active_tasks = {}
 last_commands = {}
 pagination_cooldown = {}
@@ -1024,6 +1025,12 @@ def cancel_menu():
         [[KeyboardButton("❌ Bekor qilish")]], resize_keyboard=True
     )
 
+def broadcast_count_menu():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("Barchasiga yuborish")], [KeyboardButton("❌ Bekor qilish")]],
+        resize_keyboard=True,
+    )
+
 
 def database_menu():
     return ReplyKeyboardMarkup(
@@ -1737,7 +1744,7 @@ async def process_messages(client, message):
             await send_or_edit_message(client, user_id,
                 "➕ **Yangi user(lar)ni kiriting:**\n"
                 "Usernamelarni probel, vergul yoki yangi qatordan ajratib yozavering.\n"
-                "Masalan: `@ali, @vali, @gani`",
+                "Masalan: `@username1, @username2, @username3`",
                 reply_markup=cancel_menu(),
             )
             return
@@ -1865,15 +1872,14 @@ async def process_messages(client, message):
                 )
                 return
 
-            user_states[user_id] = "broadcast_wait_text"
+            user_states[user_id] = "broadcast_wait_count"
             await send_or_edit_message(
                 client,
                 user_id,
                 f"📨 **XABAR YUBORISH**\n\n"
-                f"Sizda jami: **{len(usernames)}** ta user bor.\n"
-                "Endi yuboriladigan xabar matnini yozing:\n"
-                "_(Spamdan himoya uchun har bir xabar orasida 3 soniya pauza qo'yiladi)_",
-                reply_markup=cancel_menu(),
+                f"Qanchasiga yuboray? (Bazangizda **{len(usernames)}** ta user bor)\n\n"
+                "Nechta foydalanuvchiga xabar yuborishni xohlaysiz? Raqam kiriting yeki pastdagi tugmani bosing:",
+                reply_markup=broadcast_count_menu(),
             )
 
         elif text == "📁 Yig'ilgan userlar":
@@ -2090,11 +2096,42 @@ async def process_messages(client, message):
         user_states[user_id] = "menu"
 
     # ----- XABAR YUBORISH (BROADCAST) -----
+    elif state == "broadcast_wait_count":
+        usernames = load_user_database(user_id)
+        if text == "Barchasiga yuborish":
+            count = len(usernames)
+        else:
+            try:
+                count = int(text)
+                if count <= 0:
+                    raise ValueError
+                if count > len(usernames):
+                    count = len(usernames)
+            except ValueError:
+                await send_or_edit_message(
+                    client, user_id, "❌ Noto'g'ri son kiritildi. Qaytadan kiriting:", reply_markup=broadcast_count_menu()
+                )
+                return
+        
+        temp_broadcast_count[user_id] = count
+        user_states[user_id] = "broadcast_wait_text"
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"✅ **{count}** ta user tanlandi.\n\n"
+            "Endi yuboriladigan xabar matnini yozing:\n"
+            "_(Spamdan himoya uchun har bir xabar orasida 3 soniya pauza qo'yiladi)_",
+            reply_markup=cancel_menu(),
+        )
+        return
+
     elif state == "broadcast_wait_text":
         msg_text = text
-        usernames = load_user_database(user_id)
+        count = temp_broadcast_count.get(user_id, 0)
         user_states[user_id] = "menu"
+        temp_broadcast_count.pop(user_id, None)
 
+        usernames = load_user_database(user_id)
         if not usernames:
             await send_or_edit_message(
                 client,
@@ -2103,6 +2140,9 @@ async def process_messages(client, message):
                 reply_markup=main_menu(),
             )
             return
+
+        if count > 0 and count < len(usernames):
+            usernames = usernames[:count]
 
         ok, current = acquire_task(user_id, "broadcast")
         if not ok:
