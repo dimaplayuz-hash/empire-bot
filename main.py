@@ -176,6 +176,9 @@ os.makedirs(DATABASE_DIR, exist_ok=True)
 user_clients = {}  # {user_id: Client}
 clients_lock = threading.Lock()
 
+# Logged in users uchun ID tracking
+logged_in_users = set()  # {user_id}
+
 # Login uchun vaqtinchalik ma'lumotlar
 login_data = {}  # {user_id: {"phone": "...", "phone_code_hash": "...", "client": Client}}
 
@@ -207,8 +210,8 @@ def get_user_client_started(user_id):
 
 def is_user_logged_in(user_id):
     """User login qilganmi tekshirish"""
-    # Taqdimot uchun har doim False qaytarish
-    return False
+    # Taqdimot uchun user ID bo'yicha tekshirish
+    return user_id in logged_in_users
 
 # ================= YORIQNOMA TUGMALARI =================
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1112,6 +1115,7 @@ async def handle_login_code(client, message, user_id, code_text):
             del login_data[user_id]
         
         user_states[user_id] = "menu"
+        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
         
         first_name = message.from_user.first_name or "Mijoz"
         await message.reply_text(
@@ -1174,6 +1178,7 @@ async def handle_login_password(client, message, user_id, password_text):
             del login_data[user_id]
         
         user_states[user_id] = "menu"
+        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
         
         first_name = message.from_user.first_name or "Mijoz"
         await message.reply_text(
