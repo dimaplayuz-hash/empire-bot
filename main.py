@@ -713,17 +713,15 @@ async def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
-        # Yangi login jarayoni - telefon raqam so'rash
-        user_states[user_id] = "login_phone"
+        # Yangi login jarayoni - API_ID so'rash
+        user_states[user_id] = "login_api_id"
         text = (
             "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "📱 **Telefon raqamingizni kiriting:**\n"
-            "Masalan: `+998901234567` yoki `998901234567`\n\n"
-            "📂 **Yoki session fayl yuboring:**\n"
-            "Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin.\n\n"
+            "📱 **my.telegram.org dan API_ID ni kiriting:**\n"
+            "Masalan: `12345678`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
-        message.reply_text(text)
+        await message.reply_text(text)
         return
     
     user_states[user_id] = "menu"
@@ -738,15 +736,15 @@ async def start_command(client, message):
         "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
         "Quyidagi tugmalardan birini tanlang:"
     )
-    message.reply_text(text, reply_markup=main_menu())
+    await message.reply_text(text, reply_markup=main_menu())
 
 
 @bot_app.on_message(filters.command("cancel") & filters.private)
-def cancel_command(client, message):
+async def cancel_command(client, message):
     user_id = message.from_user.id
     state = user_states.get(user_id)
     
-    if state in ["login_phone", "login_code", "login_password", "login_upload"]:
+    if state in ["login_api_id", "login_api_hash", "login_phone", "login_code", "login_password", "login_upload"]:
         # Login jarayonini bekor qilish
         if user_id in login_data:
             try:
@@ -759,41 +757,41 @@ def cancel_command(client, message):
             del login_data[user_id]
         
         user_states[user_id] = "menu"
-        message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        await message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
     else:
-        message.reply_text("Hech narsa bekor qilinmadi.")
+        await message.reply_text("Hech narsa bekor qilinmadi.")
 
 
 @bot_app.on_message(filters.command("shutdown") & filters.private)
-def shutdown_command(client, message):
+async def shutdown_command(client, message):
     """Botni offline qiladi (faqat ikkinchi admin uchun)"""
     user_id = message.from_user.id
     
     if not is_second_admin(user_id):
-        message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
         return
     
     global bot_offline
     bot_offline = True
-    message.reply_text("🔴 **Bot offline holatiga o'tdi.**\n\nEndi hech qanday buyruqga javob bermaydi.\nOnline qilish uchun: `/power`")
+    await message.reply_text("🔴 **Bot offline holatiga o'tdi.**\n\nEndi hech qanday buyruqga javob bermaydi.\nOnline qilish uchun: `/power`")
 
 
 @bot_app.on_message(filters.command("power") & filters.private)
-def power_command(client, message):
+async def power_command(client, message):
     """Botni online qiladi (faqat ikkinchi admin uchun)"""
     user_id = message.from_user.id
     
     if not is_second_admin(user_id):
-        message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
         return
     
     global bot_offline
     bot_offline = False
-    message.reply_text("🟢 **Bot online holatiga o'tdi.**\n\nEndi barcha buyruqlarga javob beradi.")
+    await message.reply_text("🟢 **Bot online holatiga o'tdi.**\n\nEndi barcha buyruqlarga javob berada.")
 
 
 @bot_app.on_message(filters.command("admins") & filters.private)
-def admins_command(client, message):
+async def admins_command(client, message):
     """Adminlar ro'yxatini ko'rsatadi (faqat bosh admin uchun)"""
     user_id = message.from_user.id
     
@@ -802,7 +800,7 @@ def admins_command(client, message):
         return  # Bosh admin bo'lmasa, hech narsa qilmaymiz (buyruq mavjud emasdek)
     
     if not ADMIN_IDS:
-        message.reply_text("❌ Hozircha adminlar yo'q.")
+        await message.reply_text("❌ Hozircha adminlar yo'q.")
         return
     
     # Bosh admin uchun barcha adminlarni ko'rsatadi
@@ -816,7 +814,7 @@ def admins_command(client, message):
     
     text += f"\n• Jami: {len(ADMIN_IDS)} ta admin"
     
-    message.reply_text(text)
+    await message.reply_text(text)
 
 
 # Login flow handlers
@@ -832,12 +830,16 @@ async def handle_login_upload(client, message, user_id):
             final_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
             shutil.move(file_path, final_path)
             
+            # API_ID/API_HASH olish (agar session fayl yuborilsa, config dan olinadi)
+            api_id = config["API_ID"]
+            api_hash = config["API_HASH"]
+            
             # Client yaratish va tekshirish
             session_name = f"sessions/user_{user_id}"
             user_client = Client(
                 session_name,
-                api_id=config["API_ID"],
-                api_hash=config["API_HASH"],
+                api_id=api_id,
+                api_hash=api_hash,
                 workdir=BASE_DIR,
             )
             
@@ -847,7 +849,7 @@ async def handle_login_upload(client, message, user_id):
             # Tekshirish - bot emasligini
             me = user_client.get_me()
             if me.is_bot:
-                message.reply_text("❌ Bu bot session fayli. User session faylini yuboring.")
+                await message.reply_text("❌ Bu bot session fayli. User session faylini yuboring.")
                 os.remove(final_path)
                 return
             
@@ -872,9 +874,53 @@ async def handle_login_upload(client, message, user_id):
                 reply_markup=main_menu()
             )
         except Exception as e:
-            message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
+            await message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
     else:
         message.reply_text("❌ Iltimos, session faylini yuboring.")
+
+
+# API_ID/API_HASH handlers
+async def handle_login_api_id(client, message, user_id, text):
+    """API_ID ni qabul qilish"""
+    try:
+        api_id = int(text.strip())
+        if api_id <= 0:
+            await message.reply_text("❌ API_ID musbat son bo'lishi kerak.")
+            return False
+        
+        login_data[user_id] = {"api_id": api_id}
+        user_states[user_id] = "login_api_hash"
+        await message.reply_text(
+            f"✅ API_ID qabul qilindi: `{api_id}`\n\n"
+            f"🔑 **API_HASH ni kiriting:**\n"
+            f"my.telegram.org dan olingan API_HASH ni yuboring."
+        )
+        return True
+    except ValueError:
+        await message.reply_text("❌ API_ID raqam bo'lishi kerak. Masalan: `12345678`")
+        return False
+
+async def handle_login_api_hash(client, message, user_id, text):
+    """API_HASH ni qabul qilish"""
+    if user_id not in login_data:
+        await message.reply_text("❌ Avval API_ID kiriting.")
+        return False
+    
+    api_hash = text.strip()
+    if len(api_hash) < 10:
+        await message.reply_text("❌ API_HASH noto'g'ri ko'rinadi.")
+        return False
+    
+    login_data[user_id]["api_hash"] = api_hash
+    user_states[user_id] = "login_phone"
+    await message.reply_text(
+        f"✅ API_HASH qabul qilindi.\n\n"
+        f"📱 **Telefon raqamingizni kiriting:**\n"
+        f"Masalan: `+998901234567` yoki `998901234567`\n\n"
+        f"📂 **Yoki session fayl yuboring:**\n"
+        f"Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin."
+    )
+    return True
 
 
 # Telefon raqam formatini tekshirish
