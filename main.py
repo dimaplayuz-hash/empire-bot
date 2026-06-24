@@ -480,6 +480,11 @@ def save_user_database(user_id, usernames):
         for username in usernames:
             f.write(f"{username}\n")
 
+def clear_user_database(user_id):
+    file_path = get_user_file(user_id)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
 
 def format_user_batch(total, batch_usernames, start_num, end_num):
     lines = [
@@ -1200,6 +1205,7 @@ async def handle_login_password(client, message, user_id, password_text):
 
 @bot_app.on_message(filters.private & ~filters.command(["start", "shutdown", "power", "admins", "cancel"]))
 async def process_messages(client, message):
+    from pyrogram.types import ReplyKeyboardRemove
     user_id = message.from_user.id
     text = message.text
 
@@ -1209,6 +1215,11 @@ async def process_messages(client, message):
     # Debug logging
     state = user_states.get(user_id)
     print(f"📨 User {user_id} sent: '{text}', current state: {state}")
+
+    # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat login flow state'da bo'lsa mumkin)
+    if not is_user_logged_in(user_id) and state not in ["login_api_id", "login_api_hash", "login_phone", "login_code", "login_password", "login_upload"]:
+        await message.reply_text("❌ Xatolik: Siz avval tizimga kirishingiz kerak. /start ni bosing.", reply_markup=ReplyKeyboardRemove())
+        return
     
     # Login flow - API_ID kiritilganda
     if state == "login_api_id":
@@ -1288,19 +1299,27 @@ async def process_messages(client, message):
 
     if text in DATABASE_BUTTONS:
         if text == "🗑️ Bazani tozalash":
-            file_path = get_user_file(user_id)
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    await send_or_edit_message(client, user_id, "✅ Bazani muvaffaqiyatli tozaladim.", reply_markup=main_menu())
-                except Exception as e:
-                    await send_or_edit_message(client, user_id, f"❌ Xatolik: {e}", reply_markup=database_menu())
-            else:
-                await send_or_edit_message(client, user_id, "❌ Baza allaqachon bo'sh.", reply_markup=database_menu())
-            user_states[user_id] = "menu"
-        elif text == "🏠 Asosiy menyu":
+            await send_or_edit_message(client, user_id,
+                "⚠️ **Diqqat!** Barcha yig'ilgan userlar o'chirib yuboriladi.\n"
+                "Rostdan ham tozalaysizmi?",
+                reply_markup=confirm_delete_menu()
+            )
+            user_states[user_id] = "confirm_delete"
+            return
+        elif text == "🔙 Orqaga":
             user_states[user_id] = "menu"
             await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+            return
+        return
+
+    if state == "confirm_delete":
+        if text == "✅ Ha, tozalash":
+            clear_user_database(user_id)
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "🗑️ Baza tozalandi.", reply_markup=main_menu())
+        elif text == "❌ Bekor qilish":
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
         return
 
     if text not in DEDUP_EXEMPT and is_duplicate_command(user_id, text):
@@ -1334,19 +1353,15 @@ async def process_messages(client, message):
             
             
         elif text == "📨 Xabar yuborish" or text == "Xabar yuborish":
-            file_path = get_user_file(user_id)
-            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-                await send_or_edit_message(client, user_id,
-                    "❌ Bazangiz bo'sh. Avval `🚀 Scraper` orqali foydalanuvchi yig'ing.",
-                    reply_markup=main_menu()
-                )
+            usernames = load_user_database(user_id)
+            if not usernames:
+                await send_or_edit_message(client, user_id, "❌ Bazangizda userlar yo'q. Avval `🚀 Scraper` orqali user yig'ing.")
                 return
-            with open(file_path, "r", encoding="utf-8") as f:
-                count = sum(1 for line in f if line.strip())
+            
             user_states[user_id] = "broadcast_wait_text"
             await send_or_edit_message(client, user_id,
                 f"📨 **XABAR YUBORISH**\n\n"
-                f"Bazangizda **{count}** ta foydalanuvchi bor.\n\n"
+                f"Sizda jami: **{len(usernames)}** ta user bor.\n"
                 "Endi yuboriladigan xabar matnini yozing:\n"
                 "_(Spamdan himoya uchun har bir xabar orasida 3 soniya pauza qo'yiladi)_",
                 reply_markup=cancel_menu()
@@ -1413,7 +1428,7 @@ async def process_messages(client, message):
 
             await send_or_edit_message(client, user_id,
                 "⏳ Userlar yig'ilmoqda — bu biroz vaqt olishi mumkin.",
-                reply_markup=main_menu(),
+                reply_markup=ReplyKeyboardRemove(),
             )
             user_states[user_id] = "menu"
 
@@ -1449,7 +1464,7 @@ async def process_messages(client, message):
 
         await send_or_edit_message(client, user_id,
             f"⏳ {message_count:,} ta xabar o'qilmoqda — bu biroz vaqt olishi mumkin.",
-            reply_markup=main_menu(),
+            reply_markup=ReplyKeyboardRemove(),
         )
         user_states[user_id] = "menu"
 
