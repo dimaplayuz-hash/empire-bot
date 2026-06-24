@@ -1079,7 +1079,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
             f"✅ **Kod yuborildi!**\n\n"
             f"📱 Raqam: `{phone}`\n\n"
             f"🔢 Telegramdan kelgan kodni kiriting.\n\n"
-            f"💡 Masalan: `1 2 3 4 5`"
+            f"💡 Masalan: `1 2 3 4 5` (Orasiga 1 probel qo'yin yozing)"
         )
         return True
         
@@ -1102,7 +1102,7 @@ async def handle_login_code(client, message, user_id, code_text):
         # Probel, chiziqcha va nuqtalarni olib tashlash
         code = re.sub(r'[\s\-\.]', '', code_text)
         if not code.isdigit():
-            await message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak (probellarsiz 12345 kabi).")
+            await message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak. Masalan: `1 2 3 4 5`")
             return False
         
         data = login_data[user_id]
