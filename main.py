@@ -775,6 +775,11 @@ async def start_command(client, message):
         await message.reply_text(text)
         return
     
+    # Agar user logged in bo'lsa, menyuni ko'rsatmaslik kerak
+    # Chunki login flow davom etmoqda
+    if user_states.get(user_id) in ["login_api_id", "login_api_hash", "login_phone", "login_code", "login_password"]:
+        return
+    
     user_states[user_id] = "menu"
     first_name = message.from_user.first_name or "Mijoz"
     
@@ -795,7 +800,7 @@ async def cancel_command(client, message):
     user_id = message.from_user.id
     state = user_states.get(user_id)
     
-    if state in ["login_phone", "login_code", "login_password", "login_upload"]:
+    if state in ["login_phone", "login_code", "login_password", "login_upload", "login_api_id", "login_api_hash"]:
         # Login jarayonini bekor qilish
         if user_id in login_data:
             try:
