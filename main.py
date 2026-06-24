@@ -73,8 +73,15 @@ def load_config():
 
 config = load_config()
 
-# 1. BOT KLIYENTI - run_bot() ichida yaratiladi (Windows asyncio fix)
-bot_app = None  # Global referens, run_bot() da to'ldiriladi
+# 1. BOT KLIYENTI (Tugmalar va boshqaruv uchun)
+bot_app = Client(
+    "empire_bot_session",
+    api_id=config["API_ID"],
+    api_hash=config["API_HASH"],
+    bot_token=config["BOT_TOKEN"],
+    workdir=BASE_DIR,
+    in_memory=True,
+)
 
 # ================= YORDAMCHI FUNKSIYALAR =================
 def parse_group_input(raw: str):
@@ -1574,42 +1581,10 @@ def reset_user_session():
 
 async def run_bot():
     global bot_app
-    # Client shu yerda yaratiladi — asyncio.run() loop ichida, Windows uchun xavfsiz
-    bot_app = Client(
-        "empire_bot_session",
-        api_id=config["API_ID"],
-        api_hash=config["API_HASH"],
-        bot_token=config["BOT_TOKEN"],
-        workdir=BASE_DIR,
-        in_memory=True,
-    )
     print("🚀 Botni ishga tushirish...")
-    try:
-        await bot_app.start()
-        print("✅ Bot muvaffaqiyatli ishga tushdi!")
-    except FloodWait as e:
-        print(f"\n⚠️ FloodWait: {e.value} sekund kutish kerak...")
-        await asyncio.sleep(e.value)
-        await bot_app.start()
-    except UserDeactivated:
-        print("\n⚠️ Bot sessiyasi yaroqsiz. Eski sessiya o'chirilmoqda...")
-        try:
-            await bot_app.stop()
-        except Exception:
-            pass
-        reset_user_session()
-        await bot_app.start()
-    except Exception as e:
-        print(f"❌ Bot ishga tushirishda xatolik: {e}")
-        raise
-
-    try:
-        await idle()
-    finally:
-        try:
-            await bot_app.stop()
-        except Exception:
-            pass
+    await bot_app.start()
+    print("✅ Bot muvaffaqiyatli ishga tushdi!")
+    await idle()
 
 
 if __name__ == "__main__":
@@ -1621,13 +1596,5 @@ if __name__ == "__main__":
     print(f"🔑 API_HASH: {config.get('API_HASH', 'NOT SET')[:10]}..." if config.get('API_HASH') else "🔑 API_HASH: NOT SET")
     print(f"🤖 BOT_TOKEN: {config.get('BOT_TOKEN', 'NOT SET')[:20]}..." if config.get('BOT_TOKEN') else "🤖 BOT_TOKEN: NOT SET")
     print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
-    print(f"👥 Second Admin IDs: {config.get('SECOND_ADMIN_IDS', 'NOT SET')}")
     print(f"📊 logged_in_users initialized: {logged_in_users}")
-    try:
-        asyncio.run(run_bot())
-    except Exception as e:
-        print(f"❌ Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
-        import traceback
-        traceback.print_exc()
+    bot_app.run(run_bot())
