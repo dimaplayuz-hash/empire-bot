@@ -1582,7 +1582,12 @@ def reset_user_session():
 async def run_bot():
     global bot_app
     print("🚀 Botni ishga tushirish...")
-    await bot_app.start()
+    try:
+        await bot_app.start()
+        # Eski yig'ilgan xabarlarni tozalash (webhook conflict oldini olish)
+        await bot_app.invoke(__import__('pyrogram.raw.functions.updates', fromlist=['GetState']).GetState())
+    except Exception:
+        pass
     print("✅ Bot muvaffaqiyatli ishga tushdi!")
     await idle()
 
