@@ -210,6 +210,57 @@ def is_user_logged_in(user_id):
     session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
     return os.path.exists(session_file)
 
+# ================= YORIQNOMA TUGMALARI =================
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+def api_id_guide_keyboard():
+    """API_ID yoriqnoma tugmasi"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Yoriqnoma", callback_data="guide_api_id")]
+    ])
+
+def api_hash_guide_keyboard():
+    """API_HASH yoriqnoma tugmasi"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Yoriqnoma", callback_data="guide_api_hash")]
+    ])
+
+@bot_app.on_callback_query(filters.regex("^guide_api_id$"))
+async def guide_api_id_callback(client, callback):
+    """API_ID yoriqnomasini ko'rsatish"""
+    text = (
+        "📖 **API_ID olish bo'yicha yoriqnoma:**\n\n"
+        "1️⃣ Quyidagi saytga o'ting:\n"
+        "[my.telegram.org](https://my.telegram.org)\n\n"
+        "2️⃣ Telegram bilan login qiling (telefon raqam + kod)\n\n"
+        "3️⃣ 'API development tools' bo'limiga o'ting\n\n"
+        "4️⃣ 'Create new application' tugmasini bosing\n\n"
+        "5️⃣ Ma'lumotlarni to'ldiring:\n"
+        "   - App title: Empire Bot\n"
+        "   - Short name: empirebot\n"
+        "   - Platform: Desktop\n\n"
+        "6️⃣ 'Create application' tugmasini bosing\n\n"
+        "7️⃣ API_ID ni ko'ring (masalan: 12345678)\n\n"
+        "❌ Yopish uchun: /cancel"
+    )
+    await callback.message.edit_text(text, disable_web_page_preview=True)
+
+@bot_app.on_callback_query(filters.regex("^guide_api_hash$"))
+async def guide_api_hash_callback(client, callback):
+    """API_HASH yoriqnomasini ko'rsatish"""
+    text = (
+        "📖 **API_HASH olish bo'yicha yoriqnoma:**\n\n"
+        "1️⃣ Quyidagi saytga o'ting:\n"
+        "[my.telegram.org](https://my.telegram.org)\n\n"
+        "2️⃣ 'API development tools' bo'limiga o'ting\n\n"
+        "3️⃣ Siz yaratgan applicationni tanlang\n\n"
+        "4️⃣ API_HASH ni ko'ring (masalan: a1b2c3d4e5f6g7h8i9j0)\n\n"
+        "5️⃣ API_HASH ni nusxalab botga yuboring\n\n"
+        "❌ Yopish uchun: /cancel"
+    )
+    await callback.message.edit_text(text, disable_web_page_preview=True)
+
+
 # ================= ADMINLIK TIZIMI =================
 # Adminlar ro'yxati (ID lar)
 ADMIN_IDS = {
@@ -713,17 +764,15 @@ async def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
-        # Yangi login jarayoni - telefon raqam so'rash
-        user_states[user_id] = "login_phone"
+        # Yangi login jarayoni - API_ID so'rash
+        user_states[user_id] = "login_api_id"
         text = (
             "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "📱 **Telefon raqamingizni kiriting:**\n"
-            "Masalan: `+998901234567` yoki `998901234567`\n\n"
-            "📂 **Yoki session fayl yuboring:**\n"
-            "Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin.\n\n"
+            "� **API_ID ni kiriting:**\n"
+            "Masalan: `12345678`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
-        await message.reply_text(text)
+        await message.reply_text(text, reply_markup=api_id_guide_keyboard())
         return
     
     user_states[user_id] = "menu"
@@ -891,7 +940,8 @@ async def handle_login_api_id(client, message, user_id, text):
         await message.reply_text(
             f"✅ API_ID qabul qilindi: `{api_id}`\n\n"
             f"🔑 **API_HASH ni kiriting:**\n"
-            f"my.telegram.org dan olingan API_HASH ni yuboring."
+            f"my.telegram.org dan olingan API_HASH ni yuboring.",
+            reply_markup=api_hash_guide_keyboard()
         )
         return True
     except ValueError:
@@ -1151,6 +1201,16 @@ async def process_messages(client, message):
     # Debug logging
     state = user_states.get(user_id)
     print(f"📨 User {user_id} sent: '{text}', current state: {state}")
+    
+    # Login flow - API_ID kiritilganda
+    if state == "login_api_id":
+        await handle_login_api_id(client, message, user_id, text)
+        return
+    
+    # Login flow - API_HASH kiritilganda
+    if state == "login_api_hash":
+        await handle_login_api_hash(client, message, user_id, text)
+        return
     
     # Login flow - session fayl yuborilganda
     if state == "login_upload":
