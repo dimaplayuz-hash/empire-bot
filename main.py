@@ -242,13 +242,13 @@ def is_second_admin(user_id):
 last_bot_messages = {}  # {user_id: {"message_id": int, "is_editable": bool}}
 
 
-def send_or_edit_message(client, target_id, text, reply_markup=None, force_new=False):
+async def send_or_edit_message(client, target_id, text, reply_markup=None, force_new=False):
     """Oxirgi xabarni edit qiladi yoki yangisini yuboradi"""
     if not force_new and target_id in last_bot_messages:
         last_msg = last_bot_messages[target_id]
         if last_msg["is_editable"]:
             try:
-                client.edit_message_text(
+                await client.edit_message_text(
                     target_id,
                     last_msg["message_id"],
                     text,
@@ -260,7 +260,7 @@ def send_or_edit_message(client, target_id, text, reply_markup=None, force_new=F
     
     # Yangi xabar yuborish
     try:
-        msg = client.send_message(target_id, text, reply_markup=reply_markup)
+        msg = await client.send_message(target_id, text, reply_markup=reply_markup)
         last_bot_messages[target_id] = {
             "message_id": msg.id,
             "is_editable": True
@@ -269,7 +269,7 @@ def send_or_edit_message(client, target_id, text, reply_markup=None, force_new=F
     except Exception as e:
         # Agar xabar yuborib bo'lmasa, oddiy reply_text ishlatamiz
         try:
-            msg = client.send_message(target_id, text, reply_markup=reply_markup)
+            msg = await client.send_message(target_id, text, reply_markup=reply_markup)
             last_bot_messages[target_id] = {
                 "message_id": msg.id,
                 "is_editable": True
@@ -1194,13 +1194,13 @@ async def process_messages(client, message):
     # Flood protection check
     flood_message, is_blocked = check_flood(user_id)
     if flood_message:
-        send_or_edit_message(client, user_id, flood_message)
+        await send_or_edit_message(client, user_id, flood_message)
         if is_blocked:
             return
 
     if text in ["❌ Bekor qilish", "/cancel"]:
         user_states[user_id] = "menu"
-        send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+        await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
         return
 
 
@@ -1208,14 +1208,14 @@ async def process_messages(client, message):
 
     if text in MENU_BUTTONS:
         if state != "menu":
-            send_or_edit_message(client, user_id, 
+            await send_or_edit_message(client, user_id, 
                 "⚠️ Avval joriy amalni tugating yoki `❌ Bekor qilish` bosing.",
                 reply_markup=cancel_menu(),
             )
             return
         active = get_active_task(user_id)
         if active:
-            send_or_edit_message(client, user_id, active_task_message(active), reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, active_task_message(active), reply_markup=main_menu())
             return
 
     if text in DATABASE_BUTTONS:
@@ -1224,19 +1224,19 @@ async def process_messages(client, message):
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
-                    send_or_edit_message(client, user_id, "✅ Bazani muvaffaqiyatli tozaladim.", reply_markup=main_menu())
+                    await send_or_edit_message(client, user_id, "✅ Bazani muvaffaqiyatli tozaladim.", reply_markup=main_menu())
                 except Exception as e:
-                    send_or_edit_message(client, user_id, f"❌ Xatolik: {e}", reply_markup=database_menu())
+                    await send_or_edit_message(client, user_id, f"❌ Xatolik: {e}", reply_markup=database_menu())
             else:
-                send_or_edit_message(client, user_id, "❌ Baza allaqachon bo'sh.", reply_markup=database_menu())
+                await send_or_edit_message(client, user_id, "❌ Baza allaqachon bo'sh.", reply_markup=database_menu())
             user_states[user_id] = "menu"
         elif text == "🏠 Asosiy menyu":
             user_states[user_id] = "menu"
-            send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
         return
 
     if text not in DEDUP_EXEMPT and is_duplicate_command(user_id, text):
-        send_or_edit_message(client, user_id,
+        await send_or_edit_message(client, user_id,
             "⚠️ Xuddi shu buyruq hozirgina yuborilgan. Biroz kuting.",
             reply_markup=main_menu() if state == "menu" else cancel_menu(),
         )
@@ -1246,7 +1246,7 @@ async def process_messages(client, message):
     if state == "menu":
         if text == "🚀 Scraper":
             user_states[user_id] = "scrape_wait_group"
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 "🚀 **SCRAPER (Full Olish)**\n\n"
                 "Guruh manzilini yuboring:\n"
                 "• `@guruh_username`\n"
@@ -1259,7 +1259,7 @@ async def process_messages(client, message):
             
         elif text == "🔍 Guruh Qidirish":
             user_states[user_id] = "search_wait_keyword"
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 "🔍 **GURUH QIDIRISH**\n\nQaysi mavzuda guruh izlayapsiz? Kalit so'zni yozing:\n(Masalan: `biznes`, `kino`)",
                 reply_markup=cancel_menu()
             )
@@ -1268,7 +1268,7 @@ async def process_messages(client, message):
         elif text == "📨 Xabar yuborish" or text == "Xabar yuborish":
             file_path = get_user_file(user_id)
             if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-                send_or_edit_message(client, user_id,
+                await send_or_edit_message(client, user_id,
                     "❌ Bazangiz bo'sh. Avval `🚀 Scraper` orqali foydalanuvchi yig'ing.",
                     reply_markup=main_menu()
                 )
@@ -1276,7 +1276,7 @@ async def process_messages(client, message):
             with open(file_path, "r", encoding="utf-8") as f:
                 count = sum(1 for line in f if line.strip())
             user_states[user_id] = "broadcast_wait_text"
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 f"📨 **XABAR YUBORISH**\n\n"
                 f"Bazangizda **{count}** ta foydalanuvchi bor.\n\n"
                 "Endi yuboriladigan xabar matnini yozing:\n"
@@ -1287,15 +1287,15 @@ async def process_messages(client, message):
         elif text == "📁 Yig'ilgan userlar":
             usernames = load_user_database(user_id)
             if usernames:
-                send_or_edit_message(client, user_id,
+                await send_or_edit_message(client, user_id,
                     f"📁 Bazangizda **{len(usernames)}** ta user bor.",
                     reply_markup=database_menu(),
                 )
                 show_paginated_users(client, user_id, usernames)
             else:
-                send_or_edit_message(client, user_id, "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing.")
+                await send_or_edit_message(client, user_id, "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing.")
         else:
-            send_or_edit_message(client, user_id, "Iltimos, tugmalardan birini tanlang.", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, "Iltimos, tugmalardan birini tanlang.", reply_markup=main_menu())
 
     # ----- SCRAPER (FULL OLISH) -----
     elif state == "scrape_wait_group":
@@ -1305,23 +1305,23 @@ async def process_messages(client, message):
             chat_id, chat_title = resolve_chat_id(user_client, text)
             scraper_selections[user_id] = {"group": group_input, "chat_id": chat_id, "chat_title": chat_title}
             user_states[user_id] = "scrape_wait_filter"
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 f"✅ Guruh qabul qilindi: **{chat_title}**\n\n"
                 "Endi scraping usulini tanlang:",
                 reply_markup=scraper_filter_menu(),
             )
         except Exception as e:
-            send_or_edit_message(client, user_id, explain_telegram_error(e), reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, explain_telegram_error(e), reply_markup=main_menu())
             user_states[user_id] = "menu"
 
     elif state == "scrape_wait_filter":
         if text not in SCRAPER_FILTERS:
-            send_or_edit_message(client, user_id, "Iltimos, filtr tugmalaridan birini tanlang.", reply_markup=scraper_filter_menu())
+            await send_or_edit_message(client, user_id, "Iltimos, filtr tugmalaridan birini tanlang.", reply_markup=scraper_filter_menu())
             return
 
         selection = scraper_selections.get(user_id)
         if not selection:
-            send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
             user_states[user_id] = "menu"
             return
 
@@ -1329,7 +1329,7 @@ async def process_messages(client, message):
         
         if filter_type == "📊 Xabarlar orqali (Sekin)":
             user_states[user_id] = "scrape_wait_message_count"
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 "📊 **XABARLAR SONI**\n\n"
                 "Nechta xabarni o'qishni xohlaysiz?\n"
                 "• Masalan: `1000`, `10000`, `1000000`\n\n"
@@ -1339,11 +1339,11 @@ async def process_messages(client, message):
         else:
             ok, current = acquire_task(user_id, "scrape")
             if not ok:
-                send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+                await send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
                 user_states[user_id] = "menu"
                 return
 
-            send_or_edit_message(client, user_id,
+            await send_or_edit_message(client, user_id,
                 "⏳ Userlar yig'ilmoqda — bu biroz vaqt olishi mumkin.",
                 reply_markup=main_menu(),
             )
@@ -1360,30 +1360,30 @@ async def process_messages(client, message):
         try:
             message_count = int(text.replace(",", "").replace(" ", ""))
         except ValueError:
-            send_or_edit_message(client, user_id, "❌ Iltimos, raqam kiriting. Masalan: `1000`", reply_markup=cancel_menu())
+            await send_or_edit_message(client, user_id, "❌ Iltimos, raqam kiriting. Masalan: `1000`", reply_markup=cancel_menu())
             return
 
         if message_count < 1:
-            send_or_edit_message(client, user_id, "❌ Kamida 1 ta xabar kiritishingiz kerak.", reply_markup=cancel_menu())
+            await send_or_edit_message(client, user_id, "❌ Kamida 1 ta xabar kiritishingiz kerak.", reply_markup=cancel_menu())
             return
 
         if message_count > 5000000:
-            send_or_edit_message(client, user_id, "❌ Maksimal 5,000,000 ta xabar kiritish mumkin.", reply_markup=cancel_menu())
+            await send_or_edit_message(client, user_id, "❌ Maksimal 5,000,000 ta xabar kiritish mumkin.", reply_markup=cancel_menu())
             return
 
         selection = scraper_selections.get(user_id)
         if not selection:
-            send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu())
             user_states[user_id] = "menu"
             return
 
         ok, current = acquire_task(user_id, "scrape")
         if not ok:
-            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
             user_states[user_id] = "menu"
             return
 
-        send_or_edit_message(client, user_id,
+        await send_or_edit_message(client, user_id,
             f"⏳ {message_count:,} ta xabar o'qilmoqda — bu biroz vaqt olishi mumkin.",
             reply_markup=main_menu(),
         )
@@ -1401,11 +1401,11 @@ async def process_messages(client, message):
         keyword = text
         ok, current = acquire_task(user_id, "search")
         if not ok:
-            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
             user_states[user_id] = "menu"
             return
 
-        send_or_edit_message(client, user_id,
+        await send_or_edit_message(client, user_id,
             f"⏳ '{keyword}' so'zi bo'yicha Telegram global tarmog'idan guruhlar axtarilmoqda..."
         )
 
@@ -1420,11 +1420,11 @@ async def process_messages(client, message):
 
             if found_chats:
                 res_text = "🔎 **Topilgan guruhlar:**\n\n" + "\n".join(found_chats)
-                send_or_edit_message(client, user_id, res_text, reply_markup=main_menu())
+                await send_or_edit_message(client, user_id, res_text, reply_markup=main_menu())
             else:
-                send_or_edit_message(client, user_id, "❌ Hech qanday guruh topilmadi.", reply_markup=main_menu())
+                await send_or_edit_message(client, user_id, "❌ Hech qanday guruh topilmadi.", reply_markup=main_menu())
         except Exception as e:
-            send_or_edit_message(client, user_id, f"❌ Qidiruvda xatolik: {e}", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, f"❌ Qidiruvda xatolik: {e}", reply_markup=main_menu())
         finally:
             release_task(user_id, "search")
 
@@ -1440,15 +1440,15 @@ async def process_messages(client, message):
             usernames = [line.strip() for line in f if line.strip()]
 
         if not usernames:
-            send_or_edit_message(client, user_id, "❌ Bazada foydalanuvchi yo'q.", reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, "❌ Bazada foydalanuvchi yo'q.", reply_markup=main_menu())
             return
 
         ok, current = acquire_task(user_id, "broadcast")
         if not ok:
-            send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
+            await send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
             return
 
-        send_or_edit_message(client, user_id,
+        await send_or_edit_message(client, user_id,
             f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
             "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
             reply_markup=main_menu(),
