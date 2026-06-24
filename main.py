@@ -1579,12 +1579,6 @@ def reset_user_session():
                 print(f"⚠️ {name} hozir band. Botni to'xtatib, qo'lda o'chiring.")
 
 
-async def run_bot():
-    """Railway va boshqa muhitlar uchun idle loop — bot_app.run() allaqachon start/stop qiladi"""
-    print("✅ Bot muvaffaqiyatli ishga tushdi!")
-    await idle()
-
-
 if __name__ == "__main__":
     print("====================================")
     print(" EMPIRE BOT SERVER ISHGA TUSHIRILDI ")
@@ -1595,4 +1589,5 @@ if __name__ == "__main__":
     print(f"🤖 BOT_TOKEN: {config.get('BOT_TOKEN', 'NOT SET')[:20]}..." if config.get('BOT_TOKEN') else "🤖 BOT_TOKEN: NOT SET")
     print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
     print(f"📊 logged_in_users initialized: {logged_in_users}")
-    bot_app.run(run_bot())
+    print("🚀 Botni ishga tushirish...")
+    bot_app.run()
