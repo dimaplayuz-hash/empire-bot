@@ -208,7 +208,29 @@ def get_user_client_started(user_id):
 def is_user_logged_in(user_id):
     """User login qilganmi tekshirish"""
     session_file = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-    return os.path.exists(session_file)
+    # Session fayl borligini tekshirish
+    if not os.path.exists(session_file):
+        return False
+    
+    # Session fayl valid ekanligini tekshirish (client bilan connect qilib)
+    try:
+        session_name = f"sessions/user_{user_id}"
+        test_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+        test_client.connect()
+        test_client.disconnect()
+        return True
+    except:
+        # Session fayl invalid, o'chirib tashlash
+        try:
+            os.remove(session_file)
+        except:
+            pass
+        return False
 
 # ================= YORIQNOMA TUGMALARI =================
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
