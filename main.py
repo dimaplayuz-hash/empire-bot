@@ -164,7 +164,7 @@ active_tasks = {}
 last_commands = {}
 pagination_cooldown = {}
 tasks_lock = threading.Lock()
-COMMAND_COOLDOWN = 1.0  # 1 soniya cooldown (qisqartirildi)
+COMMAND_COOLDOWN = 2.0  # 2 soniya cooldown
 PAGINATION_COOLDOWN = 0.8
 PAGINATION_SIZE = 50
 DATABASE_DIR = os.path.join(BASE_DIR, "database")
@@ -1283,6 +1283,13 @@ async def process_messages(client, message):
         await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
         return
 
+    # Dublikat buyruq tekshiruvi — login va cancel bundan ozod
+    if is_duplicate_command(user_id, text):
+        await send_or_edit_message(client, user_id,
+            "⚠️ Bir xil tugmani ketma-ket bosmang. Biroz kuting.",
+            reply_markup=main_menu() if user_states.get(user_id, "menu") == "menu" else cancel_menu(),
+        )
+        return
 
     state = user_states.get(user_id, "menu")
 
@@ -1321,13 +1328,6 @@ async def process_messages(client, message):
         elif text == "❌ Bekor qilish":
             user_states[user_id] = "menu"
             await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
-        return
-
-    if text not in DEDUP_EXEMPT and is_duplicate_command(user_id, text):
-        await send_or_edit_message(client, user_id,
-            "⚠️ Xuddi shu buyruq hozirgina yuborilgan. Biroz kuting.",
-            reply_markup=main_menu() if state == "menu" else cancel_menu(),
-        )
         return
 
     # ----- ASOSIY MENYU -----
