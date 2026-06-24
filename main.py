@@ -1504,4 +1504,9 @@ if __name__ == "__main__":
     print("====================================")
     print(" EMPIRE BOT SERVER ISHGA TUSHIRILDI ")
     print("====================================")
-    bot_app.run(run_bot())
+    try:
+        bot_app.run(run_bot())
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
