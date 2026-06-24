@@ -1113,7 +1113,7 @@ async def process_messages(client, message):
         if message.document:
             await handle_login_upload(client, message, user_id)
         else:
-            message.reply_text("❌ Iltimos, session faylini yuboring.")
+            await message.reply_text("❌ Iltimos, session faylini yuboring.")
         return
     
     # Login flow - telefon raqam kiritilganda
