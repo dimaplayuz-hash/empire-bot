@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import time
 import json
@@ -831,7 +831,7 @@ async def shutdown_command(client, message):
     """Botni offline qiladi (faqat ikkinchi admin uchun)"""
     user_id = message.from_user.id
     
-    if not is_second_admin(user_id):
+    if not (is_second_admin(user_id) or is_super_admin(user_id)):
         await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
         return
     
@@ -845,7 +845,7 @@ async def power_command(client, message):
     """Botni online qiladi (faqat ikkinchi admin uchun)"""
     user_id = message.from_user.id
     
-    if not is_second_admin(user_id):
+    if not (is_second_admin(user_id) or is_super_admin(user_id)):
         await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
         return
     
