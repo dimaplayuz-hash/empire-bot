@@ -7,9 +7,9 @@ import threading
 import sys
 import shutil
 
-# Python 3.14 compatibility fix
-if sys.version_info >= (3, 14):
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+# Windows compatibility fix for asyncio and Pyrogram
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -1014,10 +1014,13 @@ async def handle_login_phone(client, message, user_id, phone_text):
     try:
         # User uchun client yaratish
         session_name = f"sessions/user_{user_id}"
+        api_id = login_data.get(user_id, {}).get("api_id", config["API_ID"])
+        api_hash = login_data.get(user_id, {}).get("api_hash", config["API_HASH"])
+        
         user_client = Client(
             session_name,
-            api_id=config["API_ID"],
-            api_hash=config["API_HASH"],
+            api_id=api_id,
+            api_hash=api_hash,
             workdir=BASE_DIR,
         )
         
@@ -1029,6 +1032,8 @@ async def handle_login_phone(client, message, user_id, phone_text):
         
         # Ma'lumotlarni saqlash
         login_data[user_id] = {
+            "api_id": api_id,
+            "api_hash": api_hash,
             "phone": phone,
             "phone_code_hash": sent_code.phone_code_hash,
             "client": user_client
@@ -1093,18 +1098,15 @@ async def handle_login_code(client, message, user_id, code_text):
         # Muvaffaqiyatli login!
         await user_client.disconnect()
         
-        # Session faylni SESSIONS_DIR ga ko'chirish
-        old_session = os.path.join(BASE_DIR, f"{session_name}.session")
-        new_session = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-        
-        if os.path.exists(old_session):
-            shutil.move(old_session, new_session)
+        session_name = f"sessions/user_{user_id}"
+        api_id = data.get("api_id", config["API_ID"])
+        api_hash = data.get("api_hash", config["API_HASH"])
         
         # Clientni qaytadan yaratish va saqlash
         user_client = Client(
             session_name,
-            api_id=config["API_ID"],
-            api_hash=config["API_HASH"],
+            api_id=api_id,
+            api_hash=api_hash,
             workdir=BASE_DIR,
         )
         
@@ -1155,19 +1157,15 @@ async def handle_login_password(client, message, user_id, password_text):
         # Muvaffaqiyatli login!
         await user_client.disconnect()
         
-        # Session faylni SESSIONS_DIR ga ko'chirish
         session_name = f"sessions/user_{user_id}"
-        old_session = os.path.join(BASE_DIR, f"{session_name}.session")
-        new_session = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
-        
-        if os.path.exists(old_session):
-            shutil.move(old_session, new_session)
+        api_id = data.get("api_id", config["API_ID"])
+        api_hash = data.get("api_hash", config["API_HASH"])
         
         # Clientni qaytadan yaratish va saqlash
         user_client = Client(
             session_name,
-            api_id=config["API_ID"],
-            api_hash=config["API_HASH"],
+            api_id=api_id,
+            api_hash=api_hash,
             workdir=BASE_DIR,
         )
         
