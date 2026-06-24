@@ -167,8 +167,9 @@ tasks_lock = threading.Lock()
 COMMAND_COOLDOWN = 2.0  # 2 soniya cooldown
 PAGINATION_COOLDOWN = 0.8
 PAGINATION_SIZE = 50
-DATABASE_DIR = os.path.join(BASE_DIR, "database")
-SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DATABASE_DIR = os.path.join(DATA_DIR, "database")
+SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(DATABASE_DIR, exist_ok=True)
 
@@ -188,7 +189,7 @@ def get_user_client(user_id):
         if user_id in user_clients:
             return user_clients[user_id]
         
-        session_name = f"sessions/user_{user_id}"
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
         client = Client(
             session_name,
             api_id=config["API_ID"],
