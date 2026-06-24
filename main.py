@@ -848,8 +848,11 @@ async def cancel_command(client, message):
         
         user_states[user_id] = "menu"
         await message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+    elif state and state != "menu":
+        user_states[user_id] = "menu"
+        await message.reply_text("🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
     else:
-        await message.reply_text("Hech narsa bekor qilinmadi.")
+        await message.reply_text("Hech narsa bekor qilinmadi.", reply_markup=main_menu())
 
 
 @bot_app.on_message(filters.command("shutdown") & filters.private)
