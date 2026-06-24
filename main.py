@@ -219,13 +219,19 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def api_id_guide_keyboard():
     """API_ID yoriqnoma tugmasi"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Yoriqnoma", callback_data="guide_api_id")]
+        [
+            InlineKeyboardButton("📖 Yo'riqnoma", callback_data="guide_api_id"),
+            InlineKeyboardButton("🖼 Masalan", callback_data="show_screenshots")
+        ]
     ])
 
 def api_hash_guide_keyboard():
     """API_HASH yoriqnoma tugmasi"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Yoriqnoma", callback_data="guide_api_hash")]
+        [
+            InlineKeyboardButton("📖 Yo'riqnoma", callback_data="guide_api_hash"),
+            InlineKeyboardButton("🖼 Masalan", callback_data="show_screenshots")
+        ]
     ])
 
 @bot_app.on_callback_query(filters.regex("^guide_api_id$"))
@@ -262,6 +268,25 @@ async def guide_api_hash_callback(client, callback):
         "❌ Yopish uchun: /cancel"
     )
     await callback.message.edit_text(text, disable_web_page_preview=True)
+
+@bot_app.on_callback_query(filters.regex("^show_screenshots$"))
+async def show_screenshots_callback(client, callback):
+    """Skrinshotlarni yuborish"""
+    await callback.answer("Skrinshotlar yuborilmoqda, biroz kuting...", show_alert=False)
+    
+    from pyrogram.types import InputMediaPhoto
+    media_group = [
+        InputMediaPhoto(os.path.join(BASE_DIR, "assets", "step1.png"), caption="1. my.telegram.org ga kirib telefon raqamni kiritasiz"),
+        InputMediaPhoto(os.path.join(BASE_DIR, "assets", "step2.png"), caption="2. Telegramdan kelgan kodni kiritasiz"),
+        InputMediaPhoto(os.path.join(BASE_DIR, "assets", "step3.png"), caption="3. 'API development tools' bo'limiga kirasiz"),
+        InputMediaPhoto(os.path.join(BASE_DIR, "assets", "step4.png"), caption="4. Application ma'lumotlarini to'ldirasiz"),
+        InputMediaPhoto(os.path.join(BASE_DIR, "assets", "step5.png"), caption="5. API_ID va API_HASH larni nusxalab olasiz")
+    ]
+    
+    try:
+        await client.send_media_group(callback.message.chat.id, media_group)
+    except Exception as e:
+        await callback.message.reply_text(f"❌ Rasmlarni yuborishda xatolik: {e}")
 
 
 # ================= ADMINLIK TIZIMI =================
@@ -780,7 +805,7 @@ async def start_command(client, message):
             "Masalan: `12345678`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
-        await message.reply_text(text)
+        await message.reply_text(text, reply_markup=api_id_guide_keyboard())
         return
     
     # Agar user logged in bo'lsa, menyuni ko'rsatmaslik kerak
@@ -954,7 +979,8 @@ async def handle_login_api_id(client, message, user_id, text):
         await message.reply_text(
             f"✅ API_ID qabul qilindi: `{api_id}`\n\n"
             f"🔑 **API_HASH ni kiriting:**\n"
-            f"my.telegram.org dan olingan API_HASH ni yuboring."
+            f"my.telegram.org dan olingan API_HASH ni yuboring.",
+            reply_markup=api_hash_guide_keyboard()
         )
         return True
     except ValueError:
@@ -1053,7 +1079,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
             f"✅ **Kod yuborildi!**\n\n"
             f"📱 Raqam: `{phone}`\n\n"
             f"🔢 Telegramdan kelgan kodni kiriting.\n\n"
-            f"💡 Masalan: `12345`"
+            f"💡 Masalan: `1 2 3 4 5`"
         )
         return True
         
