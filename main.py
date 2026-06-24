@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import time
 import json
@@ -239,7 +239,7 @@ async def guide_api_id_callback(client, callback):
         "3️⃣ 'API development tools' bo'limiga o'ting\n\n"
         "4️⃣ 'Create new application' tugmasini bosing\n\n"
         "5️⃣ Ma'lumotlarni to'ldiring:\n"
-        "   - App title: Empire Bot\n"
+        "   - App title: VENTO\n"
         "   - Short name: empirebot\n"
         "   - Platform: Desktop\n\n"
         "6️⃣ 'Create application' tugmasini bosing\n\n"
@@ -793,7 +793,7 @@ async def start_command(client, message):
     
     text = (
         f"👋 Assalomu alaykum, {first_name}!\n\n"
-        "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+        "🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
         "📌 **Mavjud xizmatlar:**\n"
         "• 🚀 Scraper — guruhlardan user yig'ish\n"
         "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
@@ -926,7 +926,7 @@ async def handle_login_upload(client, message, user_id):
             await message.reply_text(
                 f"✅ **Muvaffaqiyatli ulandi!**\n\n"
                 f"👋 Assalomu alaykum, {first_name}!\n\n"
-                "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+                "🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
                 "📌 **Mavjud xizmatlar:**\n"
                 "• 🚀 Scraper — guruhlardan user yig'ish\n"
                 "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
@@ -1130,7 +1130,7 @@ async def handle_login_code(client, message, user_id, code_text):
         await message.reply_text(
             f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
             f"👋 Assalomu alaykum, {first_name}!\n\n"
-            f"🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
             f"📌 **Mavjud xizmatlar:**\n"
             f"• 🚀 Scraper — guruhlardan user yig'ish\n"
             f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
@@ -1189,7 +1189,7 @@ async def handle_login_password(client, message, user_id, password_text):
         await message.reply_text(
             f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
             f"👋 Assalomu alaykum, {first_name}!\n\n"
-            f"🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
+            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
             f"📌 **Mavjud xizmatlar:**\n"
             f"• 🚀 Scraper — guruhlardan user yig'ish\n"
             f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
@@ -1595,7 +1595,7 @@ def reset_user_session():
 
 if __name__ == "__main__":
     print("====================================")
-    print(" EMPIRE BOT SERVER ISHGA TUSHIRILDI ")
+    print(" VENTO SERVER ISHGA TUSHIRILDI ")
     print("====================================")
     print(f"📁 Working directory: {BASE_DIR}")
     print(f"🔑 API_ID: {config.get('API_ID', 'NOT SET')}")
