@@ -1278,7 +1278,7 @@ async def handle_login_upload(client, message, user_id):
             shutil.move(file_path, final_path)
 
             # Client yaratish va tekshirish
-            session_name = f"sessions/user_{user_id}"
+            session_name = os.path.join("data", "sessions", f"user_{user_id}")
             user_client = Client(
                 session_name,
                 api_id=config["API_ID"],
@@ -1408,7 +1408,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
 
     try:
         # User uchun client yaratish
-        session_name = f"sessions/user_{user_id}"
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
         api_id = login_data.get(user_id, {}).get("api_id", config["API_ID"])
         api_hash = login_data.get(user_id, {}).get("api_hash", config["API_HASH"])
 
@@ -1499,7 +1499,7 @@ async def handle_login_code(client, message, user_id, code_text):
         # Muvaffaqiyatli login!
         await user_client.disconnect()
 
-        session_name = f"sessions/user_{user_id}"
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
         api_id = data.get("api_id", config["API_ID"])
         api_hash = data.get("api_hash", config["API_HASH"])
 
@@ -1558,7 +1558,7 @@ async def handle_login_password(client, message, user_id, password_text):
         # Muvaffaqiyatli login!
         await user_client.disconnect()
 
-        session_name = f"sessions/user_{user_id}"
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
         api_id = data.get("api_id", config["API_ID"])
         api_hash = data.get("api_hash", config["API_HASH"])
 
