@@ -703,7 +703,7 @@ def scraper_filter_menu():
 
 # ================= HANDLERLAR =================
 @bot_app.on_message(filters.command("start") & filters.private)
-def start_command(client, message):
+async def start_command(client, message):
     user_id = message.from_user.id
     
     # Offline check
@@ -937,7 +937,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
         user_states[user_id] = "login_code"
         print(f"🔑 User {user_id} state changed to login_code")
         
-        message.reply_text(
+        await message.reply_text(
             f"✅ **Kod yuborildi!**\n\n"
             f"📱 Raqam: `{phone}`\n\n"
             f"🔢 Telegramdan kelgan kodni kiriting.\n\n"
@@ -946,24 +946,24 @@ async def handle_login_phone(client, message, user_id, phone_text):
         return True
         
     except FloodWait as e:
-        message.reply_text(f"⏳ Juda ko'p urinishlar. {e.value} soniya kuting.")
+        await message.reply_text(f"⏳ Juda ko'p urinishlar. {e.value} soniya kuting.")
         return False
     except Exception as e:
         print(f"❌ Error in handle_login_phone: {e}")
-        message.reply_text(f"❌ Xatolik: {str(e)}")
+        await message.reply_text(f"❌ Xatolik: {str(e)}")
         return False
 
 
 async def handle_login_code(client, message, user_id, code_text):
     """Kodni qabul qilish va login qilish"""
     if user_id not in login_data:
-        message.reply_text("❌ Avval telefon raqamni kiriting.")
+        await message.reply_text("❌ Avval telefon raqamni kiriting.")
         return False
     
     try:
         code = code_text.strip()
         if not code.isdigit():
-            message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak.")
+            await message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak.")
             return False
         
         data = login_data[user_id]
@@ -979,7 +979,7 @@ async def handle_login_code(client, message, user_id, code_text):
             if "SESSION_PASSWORD_NEEDED" in error_str or "2FA" in error_str.lower() or "two-factor" in error_str.lower():
                 # 2FA parol kerak
                 user_states[user_id] = "login_password"
-                message.reply_text(
+                await message.reply_text(
                     "🔐 **2FA parol kerak**\n\n"
                     "Ikkita faktorli himoya parolini kiriting:\n\n"
                     "❌ Bekor qilish uchun: /cancel"
@@ -1016,7 +1016,7 @@ async def handle_login_code(client, message, user_id, code_text):
         user_states[user_id] = "menu"
         
         first_name = message.from_user.first_name or "Mijoz"
-        message.reply_text(
+        await message.reply_text(
             f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
             f"👋 Assalomu alaykum, {first_name}!\n\n"
             f"🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
@@ -1030,14 +1030,14 @@ async def handle_login_code(client, message, user_id, code_text):
         return True
         
     except Exception as e:
-        message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
+        await message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
         return False
 
 
 async def handle_login_password(client, message, user_id, password_text):
     """2FA parolni qabul qilish"""
     if user_id not in login_data:
-        message.reply_text("❌ Avval telefon raqamni kiriting.")
+        await message.reply_text("❌ Avval telefon raqamni kiriting.")
         return False
     
     try:
@@ -1078,7 +1078,7 @@ async def handle_login_password(client, message, user_id, password_text):
         user_states[user_id] = "menu"
         
         first_name = message.from_user.first_name or "Mijoz"
-        message.reply_text(
+        await message.reply_text(
             f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
             f"👋 Assalomu alaykum, {first_name}!\n\n"
             f"🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
@@ -1092,7 +1092,7 @@ async def handle_login_password(client, message, user_id, password_text):
         return True
         
     except Exception as e:
-        message.reply_text(f"❌ Noto'g'ri parol: {str(e)}\n\nQaytadan urinib ko'ring.")
+        await message.reply_text(f"❌ Noto'g'ri parol: {str(e)}\n\nQaytadan urinib ko'ring.")
         return False
 
 
