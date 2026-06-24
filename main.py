@@ -776,7 +776,7 @@ async def start_command(client, message):
         user_states[user_id] = "login_api_id"
         text = (
             "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "� **API_ID ni kiriting:**\n"
+            "🔑 **API_ID ni kiriting:**\n"
             "Masalan: `12345678`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
