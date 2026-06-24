@@ -555,7 +555,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
         if filter_type == "📊 Xabarlar orqali (Sekin)":
             max_messages = message_count if message_count else 1000
             # Boshlang'ich xabar
-            bot_app.send_message(
+            await bot_app.send_message(
                 target_id,
                 f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {max_messages:,} ta xabar o'qiladi.",
             )
@@ -572,7 +572,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
                     # Progress update - edit qilish
                     try:
                         if target_id in last_bot_messages:
-                            bot_app.edit_message_text(
+                            await bot_app.edit_message_text(
                                 target_id,
                                 last_bot_messages[target_id]["message_id"],
                                 f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {msg_count:,}/{max_messages:,} ta xabar o'qildi...",
@@ -582,7 +582,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
             
         else:
             # Boshlang'ich xabar
-            bot_app.send_message(
+            await bot_app.send_message(
                 target_id,
                 f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ 0 ta user yig'ildi...",
             )
@@ -628,7 +628,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
                     # Progress update - edit qilish
                     try:
                         if target_id in last_bot_messages:
-                            bot_app.edit_message_text(
+                            await bot_app.edit_message_text(
                                 target_id,
                                 last_bot_messages[target_id]["message_id"],
                                 f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {len(scraped)} ta user yig'ildi...",
@@ -637,7 +637,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
                         pass  # Edit qilib bo'lmadi, davom etamiz
 
         if not scraped:
-            bot_app.send_message(
+            await bot_app.send_message(
                 target_id,
                 f"❌ **{chat_title}** guruhida filtr bo'yicha user topilmadi.",
             )
@@ -650,7 +650,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
         save_user_database(target_id, all_users)
 
         scraped_list = sorted(scraped, key=str.lower)
-        bot_app.send_message(
+        await bot_app.send_message(
             target_id,
             f"✅ **{chat_title}** guruhidan **{len(scraped_list)}** ta user yig'ildi!\n"
             f"💾 Bazaga **{new_count}** ta yangi qo'shildi (jami: **{len(all_users)}**).",
@@ -658,7 +658,7 @@ async def scrape_task(target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", m
         show_paginated_users(bot_app, target_id, scraped_list)
 
     except Exception as e:
-        bot_app.send_message(target_id, explain_telegram_error(e))
+        await bot_app.send_message(target_id, explain_telegram_error(e))
     finally:
         release_task(target_id, "scrape")
 
@@ -670,7 +670,7 @@ async def broadcast_task(target_id, recipients, body):
         failed = 0
         total = len(recipients)
         
-        bot_app.send_message(
+        await bot_app.send_message(
             target_id,
             f"📤 **Xabar yuborish boshlandi...**\n\n"
             f"📊 Jami: **{total}** ta user\n"
@@ -686,7 +686,7 @@ async def broadcast_task(target_id, recipients, body):
                 if (idx + 1) % 10 == 0:
                     try:
                         if target_id in last_bot_messages:
-                            bot_app.edit_message_text(
+                            await bot_app.edit_message_text(
                                 target_id,
                                 last_bot_messages[target_id]["message_id"],
                                 f"📤 **Xabar yuborilmoqda...**\n\n"
@@ -700,7 +700,7 @@ async def broadcast_task(target_id, recipients, body):
                 
                 await asyncio.sleep(3)
             except FloodWait as e:
-                time.sleep(e.value + 5)
+                await asyncio.sleep(e.value + 5)
                 try:
                     await user_client.send_message(username, body)
                     success += 1
@@ -709,7 +709,7 @@ async def broadcast_task(target_id, recipients, body):
             except (PeerIdInvalid, UserPrivacyRestricted, Exception):
                 failed += 1
 
-        bot_app.send_message(
+        await bot_app.send_message(
             target_id,
             f"✅ **Xabar yuborish tugadi!**\n\n"
             f"📤 Yuborildi: **{success}** ta\n"
@@ -718,7 +718,7 @@ async def broadcast_task(target_id, recipients, body):
             reply_markup=main_menu(),
         )
     except Exception as e:
-        bot_app.send_message(target_id, explain_telegram_error(e), reply_markup=main_menu())
+        await bot_app.send_message(target_id, explain_telegram_error(e), reply_markup=main_menu())
     finally:
         release_task(target_id, "broadcast")
 
