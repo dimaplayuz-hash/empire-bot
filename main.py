@@ -794,7 +794,7 @@ async def start_command(client, message):
             "Masalan: `12345678`\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
-        await message.reply_text(text, reply_markup=api_id_guide_keyboard())
+        await message.reply_text(text)
         return
     
     user_states[user_id] = "menu"
@@ -962,8 +962,7 @@ async def handle_login_api_id(client, message, user_id, text):
         await message.reply_text(
             f"✅ API_ID qabul qilindi: `{api_id}`\n\n"
             f"🔑 **API_HASH ni kiriting:**\n"
-            f"my.telegram.org dan olingan API_HASH ni yuboring.",
-            reply_markup=api_hash_guide_keyboard()
+            f"my.telegram.org dan olingan API_HASH ni yuboring."
         )
         return True
     except ValueError:
