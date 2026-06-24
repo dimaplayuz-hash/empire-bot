@@ -935,6 +935,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
         
         # Keyingi holatga o'tish
         user_states[user_id] = "login_code"
+        print(f"🔑 User {user_id} state changed to login_code")
         
         message.reply_text(
             f"✅ **Kod yuborildi!**\n\n"
@@ -948,6 +949,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
         message.reply_text(f"⏳ Juda ko'p urinishlar. {e.value} soniya kuting.")
         return False
     except Exception as e:
+        print(f"❌ Error in handle_login_phone: {e}")
         message.reply_text(f"❌ Xatolik: {str(e)}")
         return False
 
@@ -1102,8 +1104,11 @@ async def process_messages(client, message):
     if not text:
         return
     
-    # Login flow - session fayl yuborilganda
+    # Debug logging
     state = user_states.get(user_id)
+    print(f"📨 User {user_id} sent: '{text}', current state: {state}")
+    
+    # Login flow - session fayl yuborilganda
     if state == "login_upload":
         if message.document:
             await handle_login_upload(client, message, user_id)
@@ -1123,6 +1128,7 @@ async def process_messages(client, message):
     
     # Login flow - kod kiritilganda
     if state == "login_code":
+        print(f"🔑 Processing code for user {user_id}")
         await handle_login_code(client, message, user_id, text)
         return
     
