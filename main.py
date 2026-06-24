@@ -713,12 +713,14 @@ async def start_command(client, message):
     
     # Login check
     if not is_user_logged_in(user_id):
-        # Yangi login jarayoni - API_ID so'rash
-        user_states[user_id] = "login_api_id"
+        # Yangi login jarayoni - telefon raqam so'rash
+        user_states[user_id] = "login_phone"
         text = (
             "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "📱 **my.telegram.org dan API_ID ni kiriting:**\n"
-            "Masalan: `12345678`\n\n"
+            "📱 **Telefon raqamingizni kiriting:**\n"
+            "Masalan: `+998901234567` yoki `998901234567`\n\n"
+            "📂 **Yoki session fayl yuboring:**\n"
+            "Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin.\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
         await message.reply_text(text)
@@ -744,7 +746,7 @@ async def cancel_command(client, message):
     user_id = message.from_user.id
     state = user_states.get(user_id)
     
-    if state in ["login_api_id", "login_api_hash", "login_phone", "login_code", "login_password", "login_upload"]:
+    if state in ["login_phone", "login_code", "login_password", "login_upload"]:
         # Login jarayonini bekor qilish
         if user_id in login_data:
             try:
@@ -830,16 +832,12 @@ async def handle_login_upload(client, message, user_id):
             final_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
             shutil.move(file_path, final_path)
             
-            # API_ID/API_HASH olish (agar session fayl yuborilsa, config dan olinadi)
-            api_id = config["API_ID"]
-            api_hash = config["API_HASH"]
-            
             # Client yaratish va tekshirish
             session_name = f"sessions/user_{user_id}"
             user_client = Client(
                 session_name,
-                api_id=api_id,
-                api_hash=api_hash,
+                api_id=config["API_ID"],
+                api_hash=config["API_HASH"],
                 workdir=BASE_DIR,
             )
             
@@ -862,7 +860,7 @@ async def handle_login_upload(client, message, user_id):
             user_states[user_id] = "menu"
             
             first_name = message.from_user.first_name or "Mijoz"
-            message.reply_text(
+            await message.reply_text(
                 f"✅ **Muvaffaqiyatli ulandi!**\n\n"
                 f"👋 Assalomu alaykum, {first_name}!\n\n"
                 "🎭 **Empire Mafia** boshqaruv paneliga xush kelibsiz!\n\n"
@@ -876,7 +874,7 @@ async def handle_login_upload(client, message, user_id):
         except Exception as e:
             await message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
     else:
-        message.reply_text("❌ Iltimos, session faylini yuboring.")
+        await message.reply_text("❌ Iltimos, session faylini yuboring.")
 
 
 # API_ID/API_HASH handlers
@@ -949,7 +947,7 @@ async def handle_login_phone(client, message, user_id, phone_text):
     phone = validate_phone_number(phone_text)
     
     if not phone:
-        message.reply_text(
+        await message.reply_text(
             "❌ **Noto'g'ri telefon raqam!**\n\n"
             "Iltimos, to'g'ri formatda kiriting:\n"
             "Masalan: `+998901234567` yoki `998901234567`"
