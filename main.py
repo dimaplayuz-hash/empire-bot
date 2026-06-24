@@ -165,6 +165,7 @@ def explain_telegram_error(error: Exception) -> str:
 # ================= MA'LUMOTLAR BAZASI =================
 user_states = {}
 user_pagination = {}
+temp_add_users = {}
 active_tasks = {}
 last_commands = {}
 pagination_cooldown = {}
@@ -492,6 +493,7 @@ MENU_BUTTONS = frozenset(
 
 DATABASE_BUTTONS = frozenset(
     {
+        "➕ Yangi user(lar) qo'shish",
         "🗑️ Bazani tozalash",
         "🏠 Asosiy menyu",
     }
@@ -1025,7 +1027,10 @@ def cancel_menu():
 
 def database_menu():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("🗑️ Bazani tozalash"), KeyboardButton("🏠 Asosiy menyu")]],
+        [
+            [KeyboardButton("➕ Yangi user(lar) qo'shish")],
+            [KeyboardButton("🗑️ Bazani tozalash"), KeyboardButton("🏠 Asosiy menyu")]
+        ],
         resize_keyboard=True,
         placeholder="Baza bo'limi...",
     )
@@ -1727,7 +1732,16 @@ async def process_messages(client, message):
             return
 
     if text in DATABASE_BUTTONS:
-        if text == "🗑️ Bazani tozalash":
+        if text == "➕ Yangi user(lar) qo'shish":
+            user_states[user_id] = "add_new_users_wait"
+            await send_or_edit_message(client, user_id,
+                "➕ **Yangi user(lar)ni kiriting:**\n"
+                "Usernamelarni probel, vergul yoki yangi qatordan ajratib yozavering.\n"
+                "Masalan: `@ali, @vali, @gani`",
+                reply_markup=cancel_menu(),
+            )
+            return
+        elif text == "🗑️ Bazani tozalash":
             await send_or_edit_message(
                 client,
                 user_id,
@@ -1746,6 +1760,59 @@ async def process_messages(client, message):
                 reply_markup=main_menu(),
             )
             return
+        return
+
+    if state == "add_new_users_wait":
+        usernames = re.findall(r"@?([A-Za-z0-9_]{5,32})", text)
+        if not usernames:
+            await send_or_edit_message(
+                client, user_id, "❌ Hech qanday yaroqli username topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu()
+            )
+            return
+        
+        formatted_usernames = [f"@{u}" if not u.startswith("@") else u for u in usernames]
+        temp_add_users[user_id] = formatted_usernames
+        user_states[user_id] = "add_new_users_confirm"
+        
+        await send_or_edit_message(
+            client, user_id,
+            f"✅ **{len(formatted_usernames)}** ta username topildi.\n\n"
+            f"Shularni bazaga qo'shishni tasdiqlaysizmi?",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("✅ Ha, tasdiqlash"), KeyboardButton("❌ Yo'q, bekor qilish")]],
+                resize_keyboard=True
+            )
+        )
+        return
+
+    if state == "add_new_users_confirm":
+        if text == "✅ Ha, tasdiqlash":
+            users_to_add = temp_add_users.get(user_id, [])
+            if users_to_add:
+                existing_users = load_user_database(user_id)
+                updated_users = set(existing_users) | set(users_to_add)
+                save_user_database(user_id, updated_users)
+            
+            user_states[user_id] = "menu"
+            temp_add_users.pop(user_id, None)
+            
+            usernames = load_user_database(user_id)
+            await send_or_edit_message(
+                client, user_id,
+                f"✅ **{len(users_to_add)}** ta user bazaga qo'shildi!\n\n"
+                f"📁 Bazangizda jami **{len(usernames)}** ta user bor.",
+                reply_markup=database_menu(),
+            )
+            show_paginated_users(client, user_id, usernames)
+            
+        elif text == "❌ Yo'q, bekor qilish":
+            user_states[user_id] = "menu"
+            temp_add_users.pop(user_id, None)
+            usernames = load_user_database(user_id)
+            await send_or_edit_message(
+                client, user_id, "❌ Bekor qilindi.", reply_markup=database_menu()
+            )
+            show_paginated_users(client, user_id, usernames)
         return
 
     if state == "confirm_delete":
