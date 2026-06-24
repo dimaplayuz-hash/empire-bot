@@ -210,8 +210,12 @@ async def get_user_client_started(user_id):
 
 def is_user_logged_in(user_id):
     """User login qilganmi tekshirish"""
-    # Taqdimot uchun user ID bo'yicha tekshirish
-    return user_id in logged_in_users
+    # Xotiradagi emas, session fayl borligiga qarab tekshiramiz
+    session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+    if os.path.exists(session_path):
+        logged_in_users.add(user_id)
+        return True
+    return False
 
 # ================= YORIQNOMA TUGMALARI =================
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -854,6 +858,73 @@ async def cancel_command(client, message):
     else:
         await message.reply_text("Hech narsa bekor qilinmadi.", reply_markup=main_menu())
 
+@bot_app.on_message(filters.command("logout") & filters.private)
+async def logout_command(client, message):
+    user_id = message.from_user.id
+    if not is_user_logged_in(user_id):
+        await message.reply_text("❌ Siz hali tizimga kirmagansiz.")
+        return
+        
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Ha, chiqish", callback_data="confirm_logout"),
+            InlineKeyboardButton("❌ Yo'q, qolish", callback_data="cancel_logout")
+        ]
+    ])
+    await message.reply_text(
+        "⚠️ **Diqqat!**\n\nTizimdan chiqsangiz barcha yig'ilgan bazangiz (userlar) va sessiyangiz o'chib ketadi. "
+        "Qaytadan API_ID va kod terib kirishingiz kerak bo'ladi.\n\nRostdan ham chiqmoqchimisiz?",
+        reply_markup=keyboard
+    )
+
+@bot_app.on_callback_query(filters.regex("^(confirm_logout|cancel_logout)$"))
+async def logout_callback(client, callback):
+    user_id = callback.from_user.id
+    
+    if callback.data == "cancel_logout":
+        await callback.message.edit_text("❌ Tizimdan chiqish bekor qilindi.")
+        return
+        
+    if callback.data == "confirm_logout":
+        await callback.answer("Ma'lumotlar o'chirilmoqda...")
+        
+        # Sessiyani o'chirish
+        session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+        
+        with clients_lock:
+            user_client = user_clients.get(user_id)
+            
+        if user_client:
+            try:
+                if user_client.is_connected:
+                    await user_client.disconnect()
+            except:
+                pass
+            with clients_lock:
+                if user_id in user_clients:
+                    del user_clients[user_id]
+                    
+        if os.path.exists(session_path):
+            try:
+                os.remove(session_path)
+            except Exception as e:
+                print(f"Error removing session {user_id}: {e}")
+                
+        # Bazani tozalash
+        clear_user_database(user_id)
+        
+        # Holatlarni tozalash
+        if user_id in logged_in_users:
+            logged_in_users.remove(user_id)
+        user_states[user_id] = "login_api_id"
+        
+        text = (
+            "✅ **Tizimdan muvaffaqiyatli chiqdingiz va barcha ma'lumotlaringiz o'chirildi.**\n\n"
+            "Qayta kirish uchun API_ID ni kiriting:\n"
+            "Masalan: `12345678`"
+        )
+        await callback.message.edit_text(text, reply_markup=api_id_guide_keyboard())
+
 
 @bot_app.on_message(filters.command("shutdown") & filters.private)
 async def shutdown_command(client, message):
@@ -1234,7 +1305,7 @@ async def handle_login_password(client, message, user_id, password_text):
         return False
 
 
-@bot_app.on_message(filters.private & ~filters.command(["start", "shutdown", "power", "admins", "cancel"]))
+@bot_app.on_message(filters.private & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout"]))
 async def process_messages(client, message):
     from pyrogram.types import ReplyKeyboardRemove
     user_id = message.from_user.id
