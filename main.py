@@ -1369,8 +1369,8 @@ async def process_messages(client, message):
     elif state == "scrape_wait_group":
         group_input = text
         try:
-            user_client = get_user_client_started(user_id)
-            chat_id, chat_title = resolve_chat_id(user_client, text)
+            user_client = await get_user_client_started(user_id)
+            chat_id, chat_title = await resolve_chat_id(user_client, text)
             scraper_selections[user_id] = {"group": group_input, "chat_id": chat_id, "chat_title": chat_title}
             user_states[user_id] = "scrape_wait_filter"
             await send_or_edit_message(client, user_id,
