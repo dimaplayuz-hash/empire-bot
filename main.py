@@ -527,7 +527,7 @@ def show_paginated_users(client, target_id, usernames, page=0):
     keyboard = build_nav_keyboard(page, total)
 
     user_pagination[target_id] = {"usernames": usernames, "page": page}
-    client.send_message(target_id, text, reply_markup=keyboard)
+    asyncio.create_task(client.send_message(target_id, text, reply_markup=keyboard))
 
 
 
@@ -815,7 +815,7 @@ async def cancel_command(client, message):
                 # Clientni tozalash
                 data = login_data[user_id]
                 if "client" in data and data["client"].is_connected:
-                    data["client"].disconnect()
+                    await data["client"].disconnect()
             except:
                 pass
             del login_data[user_id]
@@ -920,6 +920,7 @@ async def handle_login_upload(client, message, user_id):
             if user_id in login_data:
                 del login_data[user_id]
             user_states[user_id] = "menu"
+            logged_in_users.add(user_id)  # Logged in qilish
             
             first_name = message.from_user.first_name or "Mijoz"
             await message.reply_text(
@@ -1508,11 +1509,8 @@ async def process_messages(client, message):
     # ----- XABAR YUBORISH (BROADCAST) -----
     elif state == "broadcast_wait_text":
         msg_text = text
-        file_path = get_user_file(user_id)
+        usernames = load_user_database(user_id)
         user_states[user_id] = "menu"
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            usernames = [line.strip() for line in f if line.strip()]
 
         if not usernames:
             await send_or_edit_message(client, user_id, "❌ Bazada foydalanuvchi yo'q.", reply_markup=main_menu())
@@ -1523,10 +1521,11 @@ async def process_messages(client, message):
             await send_or_edit_message(client, user_id, active_task_message(current), reply_markup=main_menu())
             return
 
+        from pyrogram.types import ReplyKeyboardRemove as RKR
         await send_or_edit_message(client, user_id,
             f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
             "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
-            reply_markup=main_menu(),
+            reply_markup=RKR(),
         )
 
         asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
@@ -1534,7 +1533,7 @@ async def process_messages(client, message):
 
 
 @bot_app.on_callback_query(filters.regex("^pg:"))
-def pagination_callback(client, callback_query):
+async def pagination_callback(client, callback_query):
     user_id = callback_query.from_user.id
     action = callback_query.data.split(":")[1]
 
@@ -1542,13 +1541,13 @@ def pagination_callback(client, callback_query):
     with tasks_lock:
         last_click = pagination_cooldown.get(user_id, 0)
         if now - last_click < PAGINATION_COOLDOWN:
-            callback_query.answer("Juda tez bosyapsiz. Biroz kuting.")
+            await callback_query.answer("Juda tez bosyapsiz. Biroz kuting.")
             return
         pagination_cooldown[user_id] = now
 
     pag = user_pagination.get(user_id)
     if not pag:
-        callback_query.answer("Ro'yxat topilmadi. Qayta oching.", show_alert=True)
+        await callback_query.answer("Ro'yxat topilmadi. Qayta oching.", show_alert=True)
         return
 
     usernames = pag["usernames"]
@@ -1558,8 +1557,8 @@ def pagination_callback(client, callback_query):
 
     if action == "close":
         user_pagination.pop(user_id, None)
-        callback_query.message.delete()
-        callback_query.answer("Yopildi")
+        await callback_query.message.delete()
+        await callback_query.answer("Yopildi")
         return
 
     if action == "prev" and page > 0:
@@ -1567,7 +1566,7 @@ def pagination_callback(client, callback_query):
     elif action == "next" and page < total_pages - 1:
         page += 1
     else:
-        callback_query.answer()
+        await callback_query.answer()
         return
 
     pag["page"] = page
@@ -1575,8 +1574,8 @@ def pagination_callback(client, callback_query):
     text = format_user_batch(total, chunk, start_num, end_num)
     keyboard = build_nav_keyboard(page, total)
 
-    callback_query.message.edit_text(text, reply_markup=keyboard)
-    callback_query.answer()
+    await callback_query.message.edit_text(text, reply_markup=keyboard)
+    await callback_query.answer()
 
 
 def reset_user_session():
