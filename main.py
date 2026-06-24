@@ -1151,8 +1151,8 @@ async def handle_login_password(client, message, user_id, password_text):
         phone_code_hash = data["phone_code_hash"]
         user_client = data["client"]
         
-        # Parol bilan login qilish
-        await user_client.sign_in(phone, phone_code_hash, password=password_text)
+        # Parol bilan login qilish (Pyrogram v2: check_password())
+        await user_client.check_password(password_text)
         
         # Muvaffaqiyatli login!
         await user_client.disconnect()
