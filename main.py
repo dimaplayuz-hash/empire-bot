@@ -949,8 +949,11 @@ async def broadcast_task(target_id, recipients, body):
         success = 0
         failed = 0
         total = len(recipients)
+        
+        last_edit_time = time.time()
 
-        await bot_app.send_message(
+        await send_or_edit_message(
+            bot_app,
             target_id,
             f"📤 **Xabar yuborish boshlandi...**\n\n"
             f"📊 Jami: **{total}** ta user\n"
@@ -961,24 +964,6 @@ async def broadcast_task(target_id, recipients, body):
             try:
                 await user_client.send_message(username, body)
                 success += 1
-
-                # Har 10 ta userdan keyin progress update
-                if (idx + 1) % 10 == 0:
-                    try:
-                        if target_id in last_bot_messages:
-                            await bot_app.edit_message_text(
-                                target_id,
-                                last_bot_messages[target_id]["message_id"],
-                                f"📤 **Xabar yuborilmoqda...**\n\n"
-                                f"📊 Jami: **{total}** ta user\n"
-                                f"✅ Yuborildi: **{success}** ta\n"
-                                f"❌ Yuborilmadi: **{failed}** ta\n"
-                                f"⏳ Qolgan: **{total - success - failed}** ta",
-                            )
-                    except:
-                        pass  # Edit qilib bo'lmadi, davom etamiz
-
-                await asyncio.sleep(3)
             except FloodWait as e:
                 await asyncio.sleep(e.value + 5)
                 try:
@@ -989,7 +974,33 @@ async def broadcast_task(target_id, recipients, body):
             except (PeerIdInvalid, UserPrivacyRestricted, Exception):
                 failed += 1
 
-        await bot_app.send_message(
+            current_time = time.time()
+            if current_time - last_edit_time >= 2.0 or (success + failed) == total:
+                try:
+                    if target_id in last_bot_messages:
+                        progress = success + failed
+                        percent = (progress / total) * 100
+                        bar_len = 10
+                        filled = int(percent / 10)
+                        bar = "▓" * filled + "░" * (bar_len - filled)
+                        
+                        await bot_app.edit_message_text(
+                            target_id,
+                            last_bot_messages[target_id]["message_id"],
+                            f"📤 **Xabar yuborilmoqda...**\n\n"
+                            f"[{bar}] {percent:.1f}%\n"
+                            f"📊 Yuborilgan userlar: **{progress}/{total}**\n\n"
+                            f"✅ Muvaffaqiyatli: **{success}** ta\n"
+                            f"❌ Yuborilmadi: **{failed}** ta",
+                        )
+                        last_edit_time = current_time
+                except Exception:
+                    pass
+
+            await asyncio.sleep(3)
+
+        await send_or_edit_message(
+            bot_app,
             target_id,
             f"✅ **Xabar yuborish tugadi!**\n\n"
             f"📤 Yuborildi: **{success}** ta\n"
@@ -998,8 +1009,8 @@ async def broadcast_task(target_id, recipients, body):
             reply_markup=main_menu(),
         )
     except Exception as e:
-        await bot_app.send_message(
-            target_id, explain_telegram_error(e), reply_markup=main_menu()
+        await send_or_edit_message(
+            bot_app, target_id, explain_telegram_error(e), reply_markup=main_menu()
         )
     finally:
         release_task(target_id, "broadcast")
