@@ -1062,9 +1062,10 @@ async def handle_login_code(client, message, user_id, code_text):
         return False
     
     try:
-        code = code_text.strip()
+        # Probel, chiziqcha va nuqtalarni olib tashlash
+        code = re.sub(r'[\s\-\.]', '', code_text)
         if not code.isdigit():
-            await message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak.")
+            await message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak (probellarsiz 12345 kabi).")
             return False
         
         data = login_data[user_id]
@@ -1623,9 +1624,18 @@ if __name__ == "__main__":
     print("====================================")
     print(" EMPIRE BOT SERVER ISHGA TUSHIRILDI ")
     print("====================================")
+    print(f"📁 Working directory: {BASE_DIR}")
+    print(f"🔑 API_ID: {config.get('API_ID', 'NOT SET')}")
+    print(f"🔑 API_HASH: {config.get('API_HASH', 'NOT SET')[:10]}..." if config.get('API_HASH') else "🔑 API_HASH: NOT SET")
+    print(f"🤖 BOT_TOKEN: {config.get('BOT_TOKEN', 'NOT SET')[:20]}..." if config.get('BOT_TOKEN') else "🤖 BOT_TOKEN: NOT SET")
+    print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
+    print(f"👥 Second Admin IDs: {config.get('SECOND_ADMIN_IDS', 'NOT SET')}")
+    print(f"📊 logged_in_users initialized: {logged_in_users}")
     try:
-        bot_app.run(run_bot())
+        asyncio.run(run_bot())
     except Exception as e:
         print(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         import traceback
         traceback.print_exc()
