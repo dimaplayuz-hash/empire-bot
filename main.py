@@ -139,6 +139,8 @@ async def resolve_chat_id(client, raw: str):
 
 def explain_telegram_error(error: Exception) -> str:
     err = str(error)
+    if err.startswith("❌"):
+        return err
     if isinstance(error, UsernameNotOccupied) or "USERNAME_NOT_OCCUPIED" in err:
         return (
             "❌ **Bunday @username topilmadi!**\n\n"
@@ -209,13 +211,34 @@ def get_user_client(user_id):
 
 
 async def get_user_client_started(user_id):
-    """User uchun client olish va start qilish"""
+    """User uchun client olish va start qilish. Sessiya muddati o'tgan bo'lsa, tozalaydi."""
     client = get_user_client(user_id)
     if not client.is_connected:
         try:
             await client.start()
-        except:
-            pass  # Login paytida start qilinadi
+        except Exception as e:
+            print(f"❌ Sessiya yuklashda xatolik (User: {user_id}): {e}")
+            try:
+                await client.disconnect()
+            except:
+                pass
+            with clients_lock:
+                user_clients.pop(user_id, None)
+            
+            session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+            if os.path.exists(session_path):
+                try:
+                    os.remove(session_path)
+                except:
+                    pass
+            
+            logged_in_users.discard(user_id)
+            user_states[user_id] = "login_api_id"
+            
+            raise ValueError(
+                "❌ **Sessiyangiz muddati tugagan yoki faolsizlantirilgan!**\n\n"
+                "Sessiya o'chirildi. Iltimos, /start buyrug'ini berib qaytadan login qiling."
+            )
     return client
 
 
@@ -534,10 +557,23 @@ def acquire_task(user_id, task_name):
         return True, None
 
 
+async def cleanup_user_client(user_id):
+    """Userning clientini xotiradan tozalaydi va ulanishni yopadi (Xotirani tejash uchun)"""
+    with clients_lock:
+        client = user_clients.pop(user_id, None)
+    if client:
+        try:
+            if client.is_connected:
+                await client.disconnect()
+        except:
+            pass
+
 def release_task(user_id, task_name):
     with tasks_lock:
         if active_tasks.get(user_id) == task_name:
             active_tasks.pop(user_id, None)
+    # Background task sifatida tozalaymiz (Xotirani tejash uchun)
+    asyncio.create_task(cleanup_user_client(user_id))
 
 
 def is_duplicate_command(user_id, text):
@@ -1081,26 +1117,18 @@ async def start_command(client, message):
 
     # Login check
     if not is_user_logged_in(user_id):
-        # Yangi login jarayoni - API_ID so'rash
-        user_states[user_id] = "login_api_id"
+        # Yangi login jarayoni - telefon raqam so'rash
+        user_states[user_id] = "login_phone"
         text = (
             "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "🔑 **API_ID ni kiriting:**\n"
-            "Masalan: `12345678`\n\n"
+            "📱 **Telefon raqamingizni kiriting:**\n"
+            "Masalan: `+998901234567` yoki `998901234567`\n\n"
+            "📂 **Yoki session fayl yuboring:**\n"
+            "Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin.\n\n"
             "❌ Bekor qilish uchun: /cancel"
         )
-        await message.reply_text(text, reply_markup=api_id_guide_keyboard())
-        return
-
-    # Agar user logged in bo'lsa, menyuni ko'rsatmaslik kerak
-    # Chunki login flow davom etmoqda
-    if user_states.get(user_id) in [
-        "login_api_id",
-        "login_api_hash",
-        "login_phone",
-        "login_code",
-        "login_password",
-    ]:
+        from pyrogram.types import ReplyKeyboardRemove
+        await message.reply_text(text, reply_markup=ReplyKeyboardRemove())
         return
 
     user_states[user_id] = "menu"
@@ -1142,8 +1170,9 @@ async def cancel_command(client, message):
                 pass
             del login_data[user_id]
 
-        user_states[user_id] = "menu"
-        await message.reply_text("❌ Login bekor qilindi.", reply_markup=main_menu())
+        user_states.pop(user_id, None)
+        from pyrogram.types import ReplyKeyboardRemove
+        await message.reply_text("❌ Login bekor qilindi.\n\nQayta boshlash uchun /start ni bosing.", reply_markup=ReplyKeyboardRemove())
     elif state and state != "menu":
         user_states[user_id] = "menu"
         await message.reply_text(
@@ -1172,7 +1201,7 @@ async def logout_command(client, message):
     )
     await message.reply_text(
         "⚠️ **Diqqat!**\n\nTizimdan chiqsangiz barcha yig'ilgan bazangiz (userlar) va sessiyangiz o'chib ketadi. "
-        "Qaytadan API_ID va kod terib kirishingiz kerak bo'ladi.\n\nRostdan ham chiqmoqchimisiz?",
+        "Qaytadan telefon raqam orqali kirishingiz kerak bo'ladi.\n\nRostdan ham chiqmoqchimisiz?",
         reply_markup=keyboard,
     )
 
@@ -1214,16 +1243,14 @@ async def logout_callback(client, callback):
         clear_user_database(user_id)
 
         # Holatlarni tozalash
-        if user_id in logged_in_users:
-            logged_in_users.remove(user_id)
-        user_states[user_id] = "login_api_id"
+        logged_in_users.discard(user_id)
+        user_states.pop(user_id, None)
 
         text = (
             "✅ **Tizimdan muvaffaqiyatli chiqdingiz va barcha ma'lumotlaringiz o'chirildi.**\n\n"
-            "Qayta kirish uchun API_ID ni kiriting:\n"
-            "Masalan: `12345678`"
+            "Qayta kirish uchun /start ni bosing."
         )
-        await callback.message.edit_text(text, reply_markup=api_id_guide_keyboard())
+        await callback.message.edit_text(text)
 
 
 @bot_app.on_message(filters.command("shutdown") & filters.private)
@@ -1432,13 +1459,11 @@ async def handle_login_phone(client, message, user_id, phone_text):
     try:
         # User uchun client yaratish
         session_name = os.path.join("data", "sessions", f"user_{user_id}")
-        api_id = login_data.get(user_id, {}).get("api_id", config["API_ID"])
-        api_hash = login_data.get(user_id, {}).get("api_hash", config["API_HASH"])
 
         user_client = Client(
             session_name,
-            api_id=api_id,
-            api_hash=api_hash,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
             workdir=BASE_DIR,
         )
 
@@ -1523,14 +1548,12 @@ async def handle_login_code(client, message, user_id, code_text):
         await user_client.disconnect()
 
         session_name = os.path.join("data", "sessions", f"user_{user_id}")
-        api_id = data.get("api_id", config["API_ID"])
-        api_hash = data.get("api_hash", config["API_HASH"])
 
         # Clientni qaytadan yaratish va saqlash
         user_client = Client(
             session_name,
-            api_id=api_id,
-            api_hash=api_hash,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
             workdir=BASE_DIR,
         )
 
