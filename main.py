@@ -1228,8 +1228,6 @@ async def cancel_command(client, message):
         "login_code",
         "login_password",
         "login_upload",
-        "login_api_id",
-        "login_api_hash",
     ]:
         # Login jarayonini bekor qilish
         if user_id in login_data:
@@ -1547,8 +1545,8 @@ async def handle_login_phone(client, message, user_id, phone_text):
 
         # Ma'lumotlarni saqlash
         login_data[user_id] = {
-            "api_id": api_id,
-            "api_hash": api_hash,
+            "api_id": config["API_ID"],
+            "api_hash": config["API_HASH"],
             "phone": phone,
             "phone_code_hash": sent_code.phone_code_hash,
             "client": user_client,
@@ -1677,14 +1675,12 @@ async def handle_login_password(client, message, user_id, password_text):
         await user_client.disconnect()
 
         session_name = os.path.join("data", "sessions", f"user_{user_id}")
-        api_id = data.get("api_id", config["API_ID"])
-        api_hash = data.get("api_hash", config["API_HASH"])
 
         # Clientni qaytadan yaratish va saqlash
         user_client = Client(
             session_name,
-            api_id=api_id,
-            api_hash=api_hash,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
             workdir=BASE_DIR,
         )
 
@@ -1738,8 +1734,6 @@ async def process_messages(client, message):
 
     # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat login flow state'da bo'lsa mumkin)
     if not is_user_logged_in(user_id) and state not in [
-        "login_api_id",
-        "login_api_hash",
         "login_phone",
         "login_code",
         "login_password",
@@ -1749,16 +1743,6 @@ async def process_messages(client, message):
             "❌ Xatolik: Siz avval tizimga kirishingiz kerak. /start ni bosing.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        return
-
-    # Login flow - API_ID kiritilganda
-    if state == "login_api_id":
-        await handle_login_api_id(client, message, user_id, text)
-        return
-
-    # Login flow - API_HASH kiritilganda
-    if state == "login_api_hash":
-        await handle_login_api_hash(client, message, user_id, text)
         return
 
     # Login flow - session fayl yuborilganda
