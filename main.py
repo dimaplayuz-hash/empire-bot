@@ -170,6 +170,7 @@ user_pagination = {}
 temp_add_users = {}
 temp_broadcast_count = {}
 active_tasks = {}
+stop_flags = {}
 last_commands = {}
 pagination_cooldown = {}
 tasks_lock = threading.Lock()
@@ -572,6 +573,7 @@ def release_task(user_id, task_name):
     with tasks_lock:
         if active_tasks.get(user_id) == task_name:
             active_tasks.pop(user_id, None)
+    stop_flags.pop(user_id, None)
     # Background task sifatida tozalaymiz (Xotirani tejash uchun)
     asyncio.create_task(cleanup_user_client(user_id))
 
@@ -701,6 +703,8 @@ async def scrape_task(
             async for message in user_client.get_chat_history(
                 chat_id, limit=max_messages
             ):
+                if stop_flags.get(target_id):
+                    break
                 if (
                     message.from_user
                     and not message.from_user.is_bot
@@ -732,6 +736,8 @@ async def scrape_task(
             progress_interval = 50  # Har 50 ta userdan keyin update
 
             async for member in user_client.get_chat_members(chat_id):
+                if stop_flags.get(target_id):
+                    break
                 if member.user.is_bot or not member.user.username:
                     continue
 
@@ -997,6 +1003,8 @@ async def broadcast_task(target_id, recipients, body):
         )
 
         for idx, username in enumerate(recipients):
+            if stop_flags.get(target_id):
+                break
             try:
                 await user_client.send_message(username, body)
                 success += 1
@@ -1105,7 +1113,71 @@ def scraper_filter_menu():
     )
 
 
+# ================= U-TAG VAZIFASI =================
+async def utag_task(user_id, chat_id, text):
+    try:
+        user_client = await get_user_client_started(user_id)
+        
+        # Odamlarni to'plash
+        await bot_app.send_message(user_id, "⏳ Guruh a'zolari to'planmoqda...")
+        members = []
+        async for member in user_client.get_chat_members(chat_id):
+            if stop_flags.get(user_id):
+                break
+            if not member.user.is_bot and not member.user.is_deleted:
+                members.append(member.user)
+                
+        # Xabar yuborish
+        count = 0
+        for member in members:
+            if stop_flags.get(user_id):
+                break
+                
+            mention = f"[{member.first_name}](tg://user?id={member.id})"
+            msg = f"{mention}\n{text}" if text else mention
+            
+            try:
+                await user_client.send_message(chat_id, msg)
+                count += 1
+                await asyncio.sleep(1.5)
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 2)
+            except Exception as e:
+                pass
+                
+        await bot_app.send_message(user_id, f"✅ U-Tag yakunlandi! ({count} ta a'zo tag qilindi)")
+    except Exception as e:
+        await bot_app.send_message(user_id, f"❌ U-Tag xatosi: {e}")
+    finally:
+        release_task(user_id, "utag")
+
 # ================= HANDLERLAR =================
+@bot_app.on_message(filters.command(["utag", "atag", "tagall"], prefixes=["/", ".", "!"]) & filters.group)
+async def group_utag_command(client, message):
+    user_id = message.from_user.id
+    if not is_user_logged_in(user_id):
+        return
+
+    ok, current = acquire_task(user_id, "utag")
+    if not ok:
+        await message.reply_text(f"⚠️ Sizda hozir **{current}** vazifasi ishlayapti. Tugashini kuting.")
+        return
+
+    text = message.text.split(maxsplit=1)[1] if len(message.command) > 1 else ""
+    stop_flags[user_id] = False
+    
+    await message.reply_text("✅ U-Tag boshlandi! To'xtatish uchun: `.stop` yozing.")
+    asyncio.create_task(utag_task(user_id, message.chat.id, text))
+
+@bot_app.on_message(filters.command(["stop", "stop_utag", "cancel_task"], prefixes=["/", ".", "!"]))
+async def global_stop_command(client, message):
+    user_id = message.from_user.id
+    if get_active_task(user_id):
+        stop_flags[user_id] = True
+        await message.reply_text("🛑 Vazifa to'xtatilmoqda...")
+    else:
+        await message.reply_text("Hech qanday faol vazifa topilmadi.")
+
 @bot_app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user_id = message.from_user.id
