@@ -513,6 +513,7 @@ MENU_BUTTONS = frozenset(
         "🔍 Guruh Qidirish",
         "📨 Xabar yuborish",
         "📁 Yig'ilgan userlar",
+        "🎯 U-Tag",
     }
 )
 
@@ -537,6 +538,7 @@ TASK_LABELS = {
     "scrape": "🚀 Scraper",
     "broadcast": "📨 Xabar yuborish",
     "search": "🔍 Guruh qidirish",
+    "utag": "🎯 U-Tag",
 }
 
 DEDUP_EXEMPT = frozenset({"❌ Bekor qilish", "/cancel"})
@@ -1069,6 +1071,7 @@ def main_menu():
                 KeyboardButton("📨 Xabar yuborish"),
                 KeyboardButton("📁 Yig'ilgan userlar"),
             ],
+            [KeyboardButton("🎯 U-Tag")],
         ],
         resize_keyboard=True,
         placeholder="Bo'limni tanlang...",
@@ -1988,6 +1991,20 @@ async def process_messages(client, message):
                     user_id,
                     "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing.",
                 )
+        elif text == "🎯 U-Tag":
+            user_states[user_id] = "utag_wait_group"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "🎯 **U-TAG**\n\n"
+                "Qaysi guruhda tag qilmoqchisiz?\n"
+                "Guruh manzilini yuboring:\n"
+                "• `@guruh_username`\n"
+                "• `https://t.me/guruh_username`\n\n"
+                "⚠️ Sizning user akkauntingiz o'sha guruhda bo'lishi kerak.",
+                reply_markup=cancel_menu(),
+            )
+
         else:
             await send_or_edit_message(
                 client,
@@ -2252,6 +2269,68 @@ async def process_messages(client, message):
         )
 
         asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
+
+    # ----- U-TAG (MENYU ORQALI) -----
+    elif state == "utag_wait_group":
+        ok, current = acquire_task(user_id, "utag")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        try:
+            user_client = await get_user_client_started(user_id)
+            chat_id, chat_title = await resolve_chat_id(user_client, text)
+            
+            # Guruh topildi, matni so'raymiz
+            release_task(user_id, "utag")  # Hali boshlamadik, shu sababli bo'shatamiz
+            temp_add_users[user_id] = {"chat_id": chat_id, "chat_title": chat_title}
+            user_states[user_id] = "utag_wait_text"
+            await send_or_edit_message(
+                client,
+                user_id,
+                f"✅ Guruh topildi: **{chat_title}**\n\n"
+                "📝 Qo'shimcha matn yozing (mention + matn):\n"
+                "Yoki matn kerak bo'lmasa `yo'q` deb yozing.",
+                reply_markup=cancel_menu(),
+            )
+        except Exception as e:
+            release_task(user_id, "utag")
+            await send_or_edit_message(
+                client, user_id, explain_telegram_error(e), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+
+    elif state == "utag_wait_text":
+        info = temp_add_users.pop(user_id, None)
+        if not info:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "❌ Xatolik. Qaytadan urinib ko'ring.", reply_markup=main_menu())
+            return
+
+        utag_text = "" if text.lower() in ("yo'q", "yoq", "no", "-") else text
+
+        ok, current = acquire_task(user_id, "utag")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        stop_flags[user_id] = False
+        user_states[user_id] = "menu"
+
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"🎯 **{info['chat_title']}** guruhida U-Tag boshlandi!\n\n"
+            "To'xtatish uchun: `.stop` yozing.",
+            reply_markup=main_menu(),
+        )
+        asyncio.create_task(utag_task(user_id, info["chat_id"], utag_text))
 
 
 @bot_app.on_callback_query(filters.regex("^pg:"))
