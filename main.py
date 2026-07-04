@@ -1136,12 +1136,15 @@ async def utag_task(user_id, chat_id, text):
         # Odamlarni to'plash
         await bot_app.send_message(user_id, "⏳ Guruh a'zolari to'planmoqda...")
         
-        # Keshga olish: agar PeerIdInvalid xatosi chiqsa, dialoglarni yangilash
+        # Keshga olish: agar PeerIdInvalid yoki ValueError xatosi chiqsa, dialoglarni yangilash
         try:
             await user_client.get_chat(chat_id)
-        except PeerIdInvalid:
+        except (PeerIdInvalid, ValueError) as e:
+            if isinstance(e, ValueError) and "Peer id invalid" not in str(e).lower():
+                raise e # Boshqa ValueError bo'lsa, xatoni ko'rsatamiz
+                
             # Agar ID orqali topolmasa, oxirgi dialoglarni o'qib keshlaymiz
-            async for _ in user_client.get_dialogs(limit=50):
+            async for _ in user_client.get_dialogs(limit=100):
                 pass
             await user_client.get_chat(chat_id) # Qayta urinish
             
