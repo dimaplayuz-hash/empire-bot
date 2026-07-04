@@ -216,7 +216,9 @@ async def get_user_client_started(user_id):
     client = get_user_client(user_id)
     if not client.is_connected:
         try:
-            await client.start()
+            await client.connect()
+            # Sessiya haqiqiy ishlayotganini tekshirish
+            await client.get_me()
         except Exception as e:
             print(f"❌ Sessiya yuklashda xatolik (User: {user_id}): {e}")
             try:
@@ -234,7 +236,7 @@ async def get_user_client_started(user_id):
                     pass
             
             logged_in_users.discard(user_id)
-            user_states[user_id] = "login_api_id"
+            user_states[user_id] = "login_phone"
             
             raise ValueError(
                 "❌ **Sessiyangiz muddati tugagan yoki faolsizlantirilgan!**\n\n"
@@ -571,13 +573,14 @@ async def cleanup_user_client(user_id):
         except:
             pass
 
-def release_task(user_id, task_name):
+def release_task(user_id, task_name, cleanup=False):
+    """Taskni bo'shatadi. cleanup=True bo'lsa clientni ham tozalaydi."""
     with tasks_lock:
         if active_tasks.get(user_id) == task_name:
             active_tasks.pop(user_id, None)
     stop_flags.pop(user_id, None)
-    # Background task sifatida tozalaymiz (Xotirani tejash uchun)
-    asyncio.create_task(cleanup_user_client(user_id))
+    if cleanup:
+        asyncio.create_task(cleanup_user_client(user_id))
 
 
 def is_duplicate_command(user_id, text):
@@ -984,7 +987,7 @@ async def scrape_task(
     except Exception as e:
         await bot_app.send_message(target_id, explain_telegram_error(e))
     finally:
-        release_task(target_id, "scrape")
+        release_task(target_id, "scrape", cleanup=True)
 
 
 async def broadcast_task(target_id, recipients, body):
@@ -1059,7 +1062,7 @@ async def broadcast_task(target_id, recipients, body):
             bot_app, target_id, explain_telegram_error(e), reply_markup=main_menu()
         )
     finally:
-        release_task(target_id, "broadcast")
+        release_task(target_id, "broadcast", cleanup=True)
 
 
 # ================= MENYU =================
@@ -1098,6 +1101,15 @@ def database_menu():
         ],
         resize_keyboard=True,
         placeholder="Baza bo'limi...",
+    )
+
+
+def confirm_delete_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("✅ Ha, tozalash"), KeyboardButton("❌ Bekor qilish")],
+        ],
+        resize_keyboard=True,
     )
 
 
@@ -1152,7 +1164,7 @@ async def utag_task(user_id, chat_id, text):
     except Exception as e:
         await bot_app.send_message(user_id, f"❌ U-Tag xatosi: {e}")
     finally:
-        release_task(user_id, "utag")
+        release_task(user_id, "utag", cleanup=True)
 
 # ================= HANDLERLAR =================
 @bot_app.on_message(filters.command(["utag", "atag", "tagall"], prefixes=["/", ".", "!"]) & filters.group)
@@ -1180,6 +1192,67 @@ async def global_stop_command(client, message):
         await message.reply_text("🛑 Vazifa to'xtatilmoqda...")
     else:
         await message.reply_text("Hech qanday faol vazifa topilmadi.")
+
+@bot_app.on_message(filters.command("help", prefixes=["/", "."]) & filters.private)
+async def help_command(client, message):
+    """Barcha mavjud buyruqlar ro'yxatini chiroyli ko'rsatadi"""
+    user_id = message.from_user.id
+
+    text = (
+        "╔══════════════════════════════╗\n"
+        "   📖  **VENTO — Yordam Menyusi**\n"
+        "╚══════════════════════════════╝\n\n"
+        
+        "━━━━━ 🔐 **Tizim** ━━━━━\n\n"
+        
+        "▸ `/start`\n"
+        "  Botni ishga tushiradi va login jarayonini boshlaydi\n\n"
+        
+        "▸ `/help` yoki `.help`\n"
+        "  Barcha buyruqlar va ularning vazifalari haqida ma'lumot\n\n"
+        
+        "▸ `/logout`\n"
+        "  Tizimdan chiqadi, sessiya va bazani o'chiradi\n\n"
+        
+        "▸ `/cancel`\n"
+        "  Joriy amalni bekor qiladi va asosiy menyuga qaytaradi\n\n"
+        
+        "━━━━━ 🚀 **Asosiy Xizmatlar** ━━━━━\n\n"
+        
+        "▸ **🚀 Scraper**\n"
+        "  Guruhdan userlarni yig'adi (username bo'yicha).\n"
+        "  4 xil filtr: Avtomatik, Xabarlar orqali, Qizlar, Adminlar\n\n"
+        
+        "▸ **📨 Xabar yuborish**\n"
+        "  Bazadagi userlarga ommaviy DM xabar yuboradi.\n"
+        "  Sonini tanlash yoki barchasiga yuborish mumkin\n\n"
+        
+        "▸ **🔍 Guruh Qidirish**\n"
+        "  Kalit so'z bo'yicha Telegram global qidiruvidan\n"
+        "  ochiq guruhlarni topadi\n\n"
+        
+        "▸ **📁 Yig'ilgan userlar**\n"
+        "  Bazangizdagi barcha userlarni ko'rsatadi.\n"
+        "  Yangi user qo'shish yoki bazani tozalash mumkin\n\n"
+        
+        "▸ **🎯 U-Tag**\n"
+        "  Guruh a'zolarini mention qilib tag qiladi.\n"
+        "  Menyu orqali yoki guruhda `.utag` buyrug'i bilan ishlatiladi\n\n"
+        
+        "━━━━━ ⚡ **Guruh Buyruqlari** ━━━━━\n\n"
+        
+        "▸ `.utag [matn]` yoki `.tagall [matn]`\n"
+        "  Guruhda to'g'ridan-to'g'ri barcha a'zolarni tag qiladi\n\n"
+        
+        "▸ `.stop`\n"
+        "  Istalgan faol vazifani (scraper, broadcast, utag) to'xtatadi\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **Maslahat:** Barcha xizmatlardan foydalanish uchun\n"
+        "avval `/start` orqali tizimga kiring.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await message.reply_text(text, reply_markup=main_menu())
 
 @bot_app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
@@ -1720,7 +1793,7 @@ async def handle_login_password(client, message, user_id, password_text):
 
 @bot_app.on_message(
     filters.private
-    & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout"])
+    & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help"])
 )
 async def process_messages(client, message):
     from pyrogram.types import ReplyKeyboardRemove
@@ -2198,7 +2271,7 @@ async def process_messages(client, message):
                 client, user_id, f"❌ Qidiruvda xatolik: {e}", reply_markup=main_menu()
             )
         finally:
-            release_task(user_id, "search")
+            release_task(user_id, "search", cleanup=True)
 
         user_states[user_id] = "menu"
 
@@ -2285,7 +2358,7 @@ async def process_messages(client, message):
             chat_id, chat_title = await resolve_chat_id(user_client, text)
             
             # Guruh topildi, matni so'raymiz
-            release_task(user_id, "utag")  # Hali boshlamadik, shu sababli bo'shatamiz
+            release_task(user_id, "utag", cleanup=False)  # Taskni bo'shatamiz, lekin clientni O'CHIRMAYMIZ
             temp_add_users[user_id] = {"chat_id": chat_id, "chat_title": chat_title}
             user_states[user_id] = "utag_wait_text"
             await send_or_edit_message(
@@ -2297,7 +2370,7 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
         except Exception as e:
-            release_task(user_id, "utag")
+            release_task(user_id, "utag", cleanup=False)
             await send_or_edit_message(
                 client, user_id, explain_telegram_error(e), reply_markup=main_menu()
             )
