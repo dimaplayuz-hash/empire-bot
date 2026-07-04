@@ -1129,24 +1129,27 @@ def scraper_filter_menu():
 
 
 # ================= U-TAG VAZIFASI =================
-async def utag_task(user_id, chat_id, text):
+async def utag_task(user_id, chat_identifier, text):
     try:
         user_client = await get_user_client_started(user_id)
         
         # Odamlarni to'plash
         await bot_app.send_message(user_id, "⏳ Guruh a'zolari to'planmoqda...")
         
-        # Keshga olish: agar PeerIdInvalid yoki ValueError xatosi chiqsa, dialoglarni yangilash
+        # chat_identifier orqali guruhni topish (agar matn bo'lsa, API orqali topadi va cache muammosi bo'lmaydi)
         try:
-            await user_client.get_chat(chat_id)
+            if isinstance(chat_identifier, str):
+                chat_id, _ = await resolve_chat_id(user_client, chat_identifier)
+            else:
+                chat_id = chat_identifier
+                await user_client.get_chat(chat_id)
         except (PeerIdInvalid, ValueError) as e:
             if isinstance(e, ValueError) and "Peer id invalid" not in str(e).lower():
-                raise e # Boshqa ValueError bo'lsa, xatoni ko'rsatamiz
-                
-            # Agar ID orqali topolmasa, oxirgi dialoglarni o'qib keshlaymiz
+                raise e
             async for _ in user_client.get_dialogs(limit=100):
                 pass
-            await user_client.get_chat(chat_id) # Qayta urinish
+            chat_id = chat_identifier
+            await user_client.get_chat(chat_id)
             
         members = []
         async for member in user_client.get_chat_members(chat_id):
@@ -1195,7 +1198,8 @@ async def group_utag_command(client, message):
     stop_flags[user_id] = False
     
     await message.reply_text("✅ U-Tag boshlandi! To'xtatish uchun: `.stop` yozing.")
-    asyncio.create_task(utag_task(user_id, message.chat.id, text))
+    chat_identifier = message.chat.username if message.chat.username else message.chat.id
+    asyncio.create_task(utag_task(user_id, chat_identifier, text))
 
 @bot_app.on_message(filters.command(["stop", "stop_utag", "cancel_task"], prefixes=["/", ".", "!"]))
 async def global_stop_command(client, message):
@@ -2368,11 +2372,12 @@ async def process_messages(client, message):
 
         try:
             user_client = await get_user_client_started(user_id)
+            target = parse_group_input(text)
             chat_id, chat_title = await resolve_chat_id(user_client, text)
             
             # Guruh topildi, matni so'raymiz
             release_task(user_id, "utag", cleanup=False)  # Taskni bo'shatamiz, lekin clientni O'CHIRMAYMIZ
-            temp_add_users[user_id] = {"chat_id": chat_id, "chat_title": chat_title}
+            temp_add_users[user_id] = {"chat_id": chat_id, "chat_title": chat_title, "target": target}
             user_states[user_id] = "utag_wait_text"
             await send_or_edit_message(
                 client,
@@ -2416,7 +2421,7 @@ async def process_messages(client, message):
             "To'xtatish uchun: `.stop` yozing.",
             reply_markup=main_menu(),
         )
-        asyncio.create_task(utag_task(user_id, info["chat_id"], utag_text))
+        asyncio.create_task(utag_task(user_id, info.get("target", info["chat_id"]), utag_text))
 
 
 @bot_app.on_callback_query(filters.regex("^pg:"))
