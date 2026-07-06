@@ -463,19 +463,19 @@ ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
 
 def load_admins():
     if not os.path.exists(ADMINS_FILE):
-        return [8513957498, 8691898228]
+        return [8513957498, 8348307850]
     try:
         with open(ADMINS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
-        return [8513957498, 8691898228]
+        return [8513957498, 8348307850]
 
 def save_admins(admins_list):
     with open(ADMINS_FILE, "w", encoding="utf-8") as f:
         json.dump(list(set(admins_list)), f, indent=4)
 
 SUPER_ADMIN_ID = 8513957498
-SECOND_ADMIN_ID = 8691898228
+SECOND_ADMIN_ID = 8348307850
 
 # Bot offline holati
 bot_offline = False
