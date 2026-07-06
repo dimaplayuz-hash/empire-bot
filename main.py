@@ -189,7 +189,7 @@ os.makedirs(DATABASE_DIR, exist_ok=True)
 
 # ================= SUBSCRIPTION TIZIMI =================
 SUBSCRIPTIONS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
-SUBSCRIPTION_PRICE_STARS = 150
+SUBSCRIPTION_PRICE_STARS = 100
 SUBSCRIPTION_DAYS = 30
 
 def load_subscriptions():
