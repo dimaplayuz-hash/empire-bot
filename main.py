@@ -3276,6 +3276,112 @@ async def del_vip_command(client, message):
         await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
 
 
+@bot_app.on_message(filters.command("add_member") & filters.private)
+async def add_member_command(client, message):
+    """Lichkadan kelishgan odamga qo'lda obuna berish"""
+    user_id = message.from_user.id
+    if not is_admin(user_id) and not is_super_admin(user_id):
+        return
+    
+    target_id = None
+    days = SUBSCRIPTION_DAYS  # Default: 30 kun
+    
+    # Forward qilingan xabardan ID olish
+    if message.reply_to_message and message.reply_to_message.forward_from:
+        target_id = message.reply_to_message.forward_from.id
+    
+    if len(message.command) >= 2:
+        try:
+            target_id = int(message.command[1])
+        except:
+            pass
+        if len(message.command) >= 3:
+            try:
+                days = int(message.command[2])
+            except:
+                pass
+    
+    if not target_id:
+        await message.reply_text(
+            "📋 **OBUNACHI QO'SHISH**\n\n"
+            "Lichkadan kelishgan odamga qo'lda obuna berish:\n\n"
+            "**Foydalanish:**\n"
+            f"1️⃣ `/add_member <ID>` — {SUBSCRIPTION_DAYS} kunga obuna\n"
+            "2️⃣ `/add_member <ID> <kunlar>` — belgilangan kunga\n"
+            "3️⃣ Odam xabarini forward qilib `/add_member` deb reply qiling\n\n"
+            "**Misol:**\n"
+            "`/add_member 123456789 30` — 30 kunlik obuna\n"
+            "`/add_member 123456789 7` — 1 haftalik sinov\n\n"
+            "💡 **ID qanday topiladi?**\n"
+            "Odam botga /start bosganida logda chiqadi yoki @userinfobot ga yuboring."
+        )
+        return
+    
+    try:
+        subs = load_subscriptions()
+        str_target = str(target_id)
+        
+        expiry_time = time.time() + (days * 86400)
+        subs[str_target] = {
+            "expiry": expiry_time,
+            "source": "admin_manual",
+            "added_by": user_id,
+            "added_at": time.time()
+        }
+        save_subscriptions(subs)
+        
+        # Foydalanuvchiga xabar yuborish
+        try:
+            expiry_date = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_time))
+            await client.send_message(
+                target_id,
+                f"🎉 **Tabriklaymiz!**\n\n"
+                f"✅ Sizga **{days}** kunlik obuna faollashtirildi!\n"
+                f"📅 Amal qilish muddati: `{expiry_date}`\n\n"
+                f"Botning barcha funksiyalaridan foydalanishingiz mumkin.\n"
+                f"Boshlash uchun /start tugmasini bosing."
+            )
+        except Exception:
+            pass  # Foydalanuvchi botni start qilmagan bo'lishi mumkin
+        
+        expiry_date = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_time))
+        await message.reply_text(
+            f"✅ **Obuna faollashtirildi!**\n\n"
+            f"👤 ID: `{target_id}`\n"
+            f"📅 Muddat: **{days}** kun\n"
+            f"⏰ Tugash sanasi: `{expiry_date}`\n"
+            f"📝 Turi: Qo'lda (admin tomonidan)"
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Xatolik: {e}")
+
+
+@bot_app.on_message(filters.command("del_member") & filters.private)
+async def del_member_command(client, message):
+    """Obunani bekor qilish"""
+    user_id = message.from_user.id
+    if not is_admin(user_id) and not is_super_admin(user_id):
+        return
+    
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_member <ID>`")
+        return
+    
+    try:
+        target_id = int(message.command[1])
+        subs = load_subscriptions()
+        str_target = str(target_id)
+        
+        if str_target in subs:
+            del subs[str_target]
+            save_subscriptions(subs)
+            await message.reply_text(f"✅ `{target_id}` obunasi bekor qilindi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi obunachi emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
 def reset_user_session():
     for name in (
         "user_session.session",
