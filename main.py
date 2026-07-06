@@ -459,31 +459,34 @@ async def show_screenshots_callback(client, callback):
 
 
 # ================= ADMINLIK TIZIMI =================
-# Adminlar ro'yxati (ID lar)
-ADMIN_IDS = {
-    8513957498,  # Bosh admin (siz)
-    8691898228,  # Ikkinchi admin
-}
+ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
 
-# Bosh admin ID (faqat /admins buyruqi uchun)
+def load_admins():
+    if not os.path.exists(ADMINS_FILE):
+        return [8513957498, 8691898228]
+    try:
+        with open(ADMINS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return [8513957498, 8691898228]
+
+def save_admins(admins_list):
+    with open(ADMINS_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(set(admins_list)), f, indent=4)
+
 SUPER_ADMIN_ID = 8513957498
-
-# Ikkinchi admin ID (faqat /shutdown va /power buyruqlari uchun)
 SECOND_ADMIN_ID = 8691898228
 
 # Bot offline holati
 bot_offline = False
 
-
 def is_admin(user_id):
     """Foydalanuvchi admin ekanligini tekshiradi"""
-    return user_id in ADMIN_IDS
-
+    return user_id in load_admins() or user_id == SUPER_ADMIN_ID
 
 def is_super_admin(user_id):
     """Foydalanuvchi bosh admin ekanligini tekshiradi"""
     return user_id == SUPER_ADMIN_ID
-
 
 def is_second_admin(user_id):
     """Foydalanuvchi ikkinchi admin ekanligini tekshiradi"""
@@ -1419,9 +1422,14 @@ async def successful_payment(client, message: Message):
     
     phone = f"+{message.from_user.phone_number}" if message.from_user.phone_number else "Yashirin"
     username = f" (@{message.from_user.username})" if message.from_user.username else ""
-    try:
-        await bot_app.send_message(
-            SUPER_ADMIN_ID,
+    admins_list = load_admins()
+    if SUPER_ADMIN_ID not in admins_list:
+        admins_list.append(SUPER_ADMIN_ID)
+        
+    for admin_id in list(set(admins_list)):
+        try:
+            await bot_app.send_message(
+                admin_id,
             f"🆕 **Yangi obuna to'lovi!**\n\n"
             f"👤 Foydalanuvchi: [{first_name}](tg://user?id={user_id}){username}\n"
             f"🆔 ID: `{user_id}`\n"
@@ -1430,8 +1438,8 @@ async def successful_payment(client, message: Message):
             f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
             reply_markup=markup
         )
-    except Exception as e:
-        print("Adminga xabar yuborishda xatolik:", e)
+        except Exception as e:
+            print(f"Adminga xabar yuborishda xatolik ({admin_id}):", e)
 
 
 @bot_app.on_callback_query(filters.regex("^sub_common:"))
@@ -3000,6 +3008,54 @@ async def pagination_callback(client, callback_query):
 
     await callback_query.message.edit_text(text, reply_markup=keyboard)
     await callback_query.answer()
+
+
+@bot_app.on_message(filters.command("add_admin") & filters.private)
+async def add_admin_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/add_admin <foydalanuvchi_id>`")
+        return
+        
+    try:
+        new_admin = int(message.command[1])
+        admins = load_admins()
+        if new_admin not in admins:
+            admins.append(new_admin)
+            save_admins(admins)
+            await message.reply_text(f"✅ {new_admin} ID'li foydalanuvchi admin etib tayinlandi.\nEndi u ham dashboardni ko'ra oladi va foydalanuvchilarni qabul qilishi mumkin.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi allaqachon admin.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("del_admin") & filters.private)
+async def del_admin_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_admin <foydalanuvchi_id>`")
+        return
+        
+    try:
+        del_admin = int(message.command[1])
+        if del_admin == SUPER_ADMIN_ID:
+            await message.reply_text("❌ O'zingizni adminlikdan ololmaysiz!")
+            return
+            
+        admins = load_admins()
+        if del_admin in admins:
+            admins.remove(del_admin)
+            save_admins(admins)
+            await message.reply_text(f"✅ {del_admin} ID'li foydalanuvchi adminlikdan o'chirildi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi admin emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
 
 
 def reset_user_session():
