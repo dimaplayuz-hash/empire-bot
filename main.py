@@ -224,6 +224,16 @@ def is_subscribed(user_id):
     if is_admin(user_id) or is_super_admin(user_id) or is_second_admin(user_id):
         return True
         
+    VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+    if os.path.exists(VIP_FILE):
+        try:
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                vips = json.load(f)
+                if user_id in vips:
+                    return True
+        except:
+            pass
+        
     subs = load_subscriptions()
     str_id = str(user_id)
     if str_id not in subs:
@@ -3104,6 +3114,68 @@ async def del_admin_command(client, message):
             await message.reply_text(f"✅ {del_admin} ID'li foydalanuvchi adminlikdan o'chirildi.")
         else:
             await message.reply_text("⚠️ Bu foydalanuvchi admin emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("add_vip") & filters.private)
+async def add_vip_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/add_vip <foydalanuvchi_id>`")
+        return
+        
+    try:
+        new_vip = int(message.command[1])
+        VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+        vips = []
+        if os.path.exists(VIP_FILE):
+            try:
+                with open(VIP_FILE, "r", encoding="utf-8") as f:
+                    vips = json.load(f)
+            except:
+                pass
+                
+        if new_vip not in vips:
+            vips.append(new_vip)
+            with open(VIP_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(set(vips)), f, indent=4)
+            await message.reply_text(f"✅ {new_vip} VIP ro'yxatga qo'shildi.\nEndi unga bot tekin ishlaydi va dashboard'da ko'rinmaydi. Maxfiy!")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi allaqachon VIP.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("del_vip") & filters.private)
+async def del_vip_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_vip <foydalanuvchi_id>`")
+        return
+        
+    try:
+        del_vip = int(message.command[1])
+        VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+        vips = []
+        if os.path.exists(VIP_FILE):
+            try:
+                with open(VIP_FILE, "r", encoding="utf-8") as f:
+                    vips = json.load(f)
+            except:
+                pass
+                
+        if del_vip in vips:
+            vips.remove(del_vip)
+            with open(VIP_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(set(vips)), f, indent=4)
+            await message.reply_text(f"✅ {del_vip} VIP ro'yxatdan o'chirildi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi VIP emas.")
     except:
         await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
 
