@@ -229,8 +229,20 @@ def is_subscribed(user_id):
         try:
             with open(VIP_FILE, "r", encoding="utf-8") as f:
                 vips = json.load(f)
-                if user_id in vips:
-                    return True
+                # Eski format (list)
+                if isinstance(vips, list):
+                    if user_id in vips:
+                        return True
+                # Yangi format (dict)
+                elif isinstance(vips, dict):
+                    str_id = str(user_id)
+                    if str_id in vips:
+                        vip_data = vips[str_id]
+                        # Muddati bormi tekshirish
+                        if isinstance(vip_data, dict) and vip_data.get("expiry"):
+                            if time.time() > vip_data["expiry"]:
+                                return False  # Muddati tugagan
+                        return True
         except:
             pass
         
@@ -1197,20 +1209,23 @@ async def scrape_task(
         release_task(target_id, "scrape", cleanup=True)
 
 
-async def broadcast_task(target_id, recipients, body):
+async def broadcast_task(target_id, recipients, body, auto_delete=False):
     try:
         user_client = await get_user_client_started(target_id)
         success = 0
         failed = 0
+        deleted = 0
         total = len(recipients)
         
         last_edit_time = time.time()
+        mode_text = "👻 STEALTH (yuborib o'chirish)" if auto_delete else "📤 Oddiy yuborish"
 
         await send_or_edit_message(
             bot_app,
             target_id,
             f"📤 **Xabar yuborish boshlandi...**\n\n"
             f"📊 Jami: **{total}** ta user\n"
+            f"🔧 Rejim: {mode_text}\n"
             f"⏳ Jarayon davom etmoqda...",
         )
 
@@ -1218,13 +1233,28 @@ async def broadcast_task(target_id, recipients, body):
             if stop_flags.get(target_id):
                 break
             try:
-                await user_client.send_message(username, body)
+                sent_msg = await user_client.send_message(username, body)
                 success += 1
+                # Stealth rejimda: xabar yuborilgach 3 soniyadan keyin o'chiriladi
+                if auto_delete and sent_msg:
+                    await asyncio.sleep(2)
+                    try:
+                        await sent_msg.delete()
+                        deleted += 1
+                    except Exception:
+                        pass
             except FloodWait as e:
                 await asyncio.sleep(e.value + 5)
                 try:
-                    await user_client.send_message(username, body)
+                    sent_msg = await user_client.send_message(username, body)
                     success += 1
+                    if auto_delete and sent_msg:
+                        await asyncio.sleep(2)
+                        try:
+                            await sent_msg.delete()
+                            deleted += 1
+                        except Exception:
+                            pass
                 except Exception:
                     failed += 1
             except (PeerIdInvalid, UserPrivacyRestricted, Exception):
@@ -1240,6 +1270,7 @@ async def broadcast_task(target_id, recipients, body):
                         filled = int(percent / 10)
                         bar = "▓" * filled + "░" * (bar_len - filled)
                         
+                        stealth_line = f"\n🗑️ O'chirildi: **{deleted}** ta" if auto_delete else ""
                         await bot_app.edit_message_text(
                             target_id,
                             last_bot_messages[target_id]["message_id"],
@@ -1247,7 +1278,7 @@ async def broadcast_task(target_id, recipients, body):
                             f"[{bar}] {percent:.1f}%\n"
                             f"📊 Yuborilgan userlar: **{progress}/{total}**\n\n"
                             f"✅ Muvaffaqiyatli: **{success}** ta\n"
-                            f"❌ Yuborilmadi: **{failed}** ta",
+                            f"❌ Yuborilmadi: **{failed}** ta{stealth_line}",
                         )
                         last_edit_time = current_time
                 except Exception:
@@ -1255,12 +1286,13 @@ async def broadcast_task(target_id, recipients, body):
 
             await asyncio.sleep(3)
 
+        stealth_result = f"\n🗑️ O'chirildi: **{deleted}** ta" if auto_delete else ""
         await send_or_edit_message(
             bot_app,
             target_id,
             f"✅ **Xabar yuborish tugadi!**\n\n"
             f"📤 Yuborildi: **{success}** ta\n"
-            f"❌ Yuborilmadi: **{failed}** ta\n"
+            f"❌ Yuborilmadi: **{failed}** ta{stealth_result}\n"
             f"📊 Jami: **{total}** ta",
             reply_markup=main_menu(),
         )
@@ -2923,8 +2955,32 @@ async def process_messages(client, message):
         return
 
     elif state == "broadcast_wait_text":
-        msg_text = text
-        count = temp_broadcast_count.get(user_id, 0)
+        # Xabar matnini saqlaymiz va rejim tanlashni so'raymiz
+        temp_broadcast_count[user_id] = {"count": temp_broadcast_count.get(user_id, 0), "text": text}
+        user_states[user_id] = "broadcast_wait_mode"
+        await send_or_edit_message(
+            client,
+            user_id,
+            "📨 **Yuborish rejimini tanlang:**\n\n"
+            "📤 **Oddiy** — xabar yuboriladi va qoladi\n"
+            "👻 **Stealth** — xabar yuboriladi, odam o'qishi uchun 2 soniya kutadi, keyin avtomatik o'chiriladi (iz qoldirmaydi!)",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("📤 Oddiy yuborish"), KeyboardButton("👻 Stealth (yuborib o'chirish)")]],
+                resize_keyboard=True
+            ),
+        )
+        return
+
+    elif state == "broadcast_wait_mode":
+        data = temp_broadcast_count.get(user_id, {})
+        if isinstance(data, dict):
+            msg_text = data.get("text", "")
+            count = data.get("count", 0)
+        else:
+            msg_text = ""
+            count = data
+        
+        auto_delete = "stealth" in text.lower() or "👻" in text
         user_states[user_id] = "menu"
         temp_broadcast_count.pop(user_id, None)
 
@@ -2950,15 +3006,17 @@ async def process_messages(client, message):
 
         from pyrogram.types import ReplyKeyboardRemove as RKR
 
+        mode_name = "👻 STEALTH" if auto_delete else "📤 Oddiy"
         await send_or_edit_message(
             client,
             user_id,
             f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
+            f"🔧 Rejim: {mode_name}\n"
             "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
             reply_markup=RKR(),
         )
 
-        asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
+        asyncio.create_task(broadcast_task(user_id, usernames, msg_text, auto_delete=auto_delete))
 
     # ----- U-TAG (MENYU ORQALI) -----
     elif state == "utag_wait_group":
@@ -3122,31 +3180,69 @@ async def del_admin_command(client, message):
 async def add_vip_command(client, message):
     if not is_super_admin(message.from_user.id):
         return
-        
-    if len(message.command) < 2:
-        await message.reply_text("❌ Foydalanish: `/add_vip <foydalanuvchi_id>`")
+    
+    # Forward qilingan xabardan ID olish
+    new_vip = None
+    days = None
+    
+    if message.reply_to_message and message.reply_to_message.forward_from:
+        new_vip = message.reply_to_message.forward_from.id
+    
+    if len(message.command) >= 2:
+        try:
+            new_vip = int(message.command[1])
+        except:
+            pass
+        # Kunlik muddat: /add_vip 123456 30 (30 kun)
+        if len(message.command) >= 3:
+            try:
+                days = int(message.command[2])
+            except:
+                pass
+    
+    if not new_vip:
+        await message.reply_text(
+            "❌ **Foydalanish:**\n\n"
+            "1️⃣ `/add_vip <ID>` — umrbod VIP\n"
+            "2️⃣ `/add_vip <ID> <kunlar>` — muddatli VIP (masalan 30 kun)\n"
+            "3️⃣ Odam xabarini **forward** qiling va unga reply qilib `/add_vip` yozing\n\n"
+            "💡 ID bilmaysizmi? Odam botga kirsin, /start bossin, keyin `/users` bilan ko'ring."
+        )
         return
         
     try:
-        new_vip = int(message.command[1])
         VIP_FILE = os.path.join(DATA_DIR, "vips.json")
-        vips = []
+        vips = {}
         if os.path.exists(VIP_FILE):
             try:
                 with open(VIP_FILE, "r", encoding="utf-8") as f:
-                    vips = json.load(f)
+                    loaded = json.load(f)
+                    # Eski formatni yangi formatga o'tkazish
+                    if isinstance(loaded, list):
+                        vips = {str(uid): {"added": time.time(), "days": None} for uid in loaded}
+                    else:
+                        vips = loaded
             except:
                 pass
                 
-        if new_vip not in vips:
-            vips.append(new_vip)
-            with open(VIP_FILE, "w", encoding="utf-8") as f:
-                json.dump(list(set(vips)), f, indent=4)
-            await message.reply_text(f"✅ {new_vip} VIP ro'yxatga qo'shildi.\nEndi unga bot tekin ishlaydi va dashboard'da ko'rinmaydi. Maxfiy!")
-        else:
-            await message.reply_text("⚠️ Bu foydalanuvchi allaqachon VIP.")
+        str_vip = str(new_vip)
+        expiry_text = "♾ Umrbod (cheksiz)" if not days else f"📅 {days} kun"
+        
+        vips[str_vip] = {
+            "added": time.time(),
+            "days": days,
+            "expiry": time.time() + (days * 86400) if days else None
+        }
+        with open(VIP_FILE, "w", encoding="utf-8") as f:
+            json.dump(vips, f, indent=4)
+        await message.reply_text(
+            f"✅ **VIP qo'shildi!**\n\n"
+            f"👤 ID: `{new_vip}`\n"
+            f"⏰ Muddat: {expiry_text}\n\n"
+            f"Endi unga bot tekin ishlaydi. Dashboard'da ko'rinmaydi. 🤫"
+        )
     except:
-        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+        await message.reply_text("❌ Xatolik yuz berdi.")
 
 
 @bot_app.on_message(filters.command("del_vip") & filters.private)
