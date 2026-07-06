@@ -1214,18 +1214,17 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
         user_client = await get_user_client_started(target_id)
         success = 0
         failed = 0
-        deleted = 0
         total = len(recipients)
         
         last_edit_time = time.time()
-        mode_text = "👻 STEALTH (yuborib o'chirish)" if auto_delete else "📤 Oddiy yuborish"
+        
+        sent_messages_history = []
 
         await send_or_edit_message(
             bot_app,
             target_id,
             f"📤 **Xabar yuborish boshlandi...**\n\n"
             f"📊 Jami: **{total}** ta user\n"
-            f"🔧 Rejim: {mode_text}\n"
             f"⏳ Jarayon davom etmoqda...",
         )
 
@@ -1235,26 +1234,15 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
             try:
                 sent_msg = await user_client.send_message(username, body)
                 success += 1
-                # Stealth rejimda: xabar yuborilgach 3 soniyadan keyin o'chiriladi
-                if auto_delete and sent_msg:
-                    await asyncio.sleep(2)
-                    try:
-                        await sent_msg.delete()
-                        deleted += 1
-                    except Exception:
-                        pass
+                if sent_msg:
+                    sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
             except FloodWait as e:
                 await asyncio.sleep(e.value + 5)
                 try:
                     sent_msg = await user_client.send_message(username, body)
                     success += 1
-                    if auto_delete and sent_msg:
-                        await asyncio.sleep(2)
-                        try:
-                            await sent_msg.delete()
-                            deleted += 1
-                        except Exception:
-                            pass
+                    if sent_msg:
+                        sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
                 except Exception:
                     failed += 1
             except (PeerIdInvalid, UserPrivacyRestricted, Exception):
@@ -1270,7 +1258,6 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
                         filled = int(percent / 10)
                         bar = "▓" * filled + "░" * (bar_len - filled)
                         
-                        stealth_line = f"\n🗑️ O'chirildi: **{deleted}** ta" if auto_delete else ""
                         await bot_app.edit_message_text(
                             target_id,
                             last_bot_messages[target_id]["message_id"],
@@ -1278,7 +1265,7 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
                             f"[{bar}] {percent:.1f}%\n"
                             f"📊 Yuborilgan userlar: **{progress}/{total}**\n\n"
                             f"✅ Muvaffaqiyatli: **{success}** ta\n"
-                            f"❌ Yuborilmadi: **{failed}** ta{stealth_line}",
+                            f"❌ Yuborilmadi: **{failed}** ta",
                         )
                         last_edit_time = current_time
                 except Exception:
@@ -1286,16 +1273,33 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
 
             await asyncio.sleep(3)
 
-        stealth_result = f"\n🗑️ O'chirildi: **{deleted}** ta" if auto_delete else ""
-        await send_or_edit_message(
-            bot_app,
+        # Save history to file
+        history_file = os.path.join(DATA_DIR, f"broadcast_history_{target_id}.json")
+        try:
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(sent_messages_history, f)
+        except Exception:
+            pass
+
+        markup = None
+        if sent_messages_history:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ Barcha yuborilganlarni o'chirish", callback_data="delete_broadcast")]
+            ])
+
+        await bot_app.send_message(
             target_id,
             f"✅ **Xabar yuborish tugadi!**\n\n"
             f"📤 Yuborildi: **{success}** ta\n"
-            f"❌ Yuborilmadi: **{failed}** ta{stealth_result}\n"
-            f"📊 Jami: **{total}** ta",
-            reply_markup=main_menu(),
+            f"❌ Yuborilmadi: **{failed}** ta\n"
+            f"📊 Jami: **{total}** ta\n\n"
+            f"💡 *Agar xabarlarni barchadan o'chirib tashlamoqchi bo'lsangiz, pastdagi tugmani bosing.*",
+            reply_markup=markup
         )
+        
+        # O'zgarishsiz qoldirish uchun main_menu ham yuboramiz
+        await send_or_edit_message(bot_app, target_id, "🏠 Asosiy menyu", reply_markup=main_menu())
+        
     except Exception as e:
         await send_or_edit_message(
             bot_app, target_id, explain_telegram_error(e), reply_markup=main_menu()
@@ -2955,32 +2959,8 @@ async def process_messages(client, message):
         return
 
     elif state == "broadcast_wait_text":
-        # Xabar matnini saqlaymiz va rejim tanlashni so'raymiz
-        temp_broadcast_count[user_id] = {"count": temp_broadcast_count.get(user_id, 0), "text": text}
-        user_states[user_id] = "broadcast_wait_mode"
-        await send_or_edit_message(
-            client,
-            user_id,
-            "📨 **Yuborish rejimini tanlang:**\n\n"
-            "📤 **Oddiy** — xabar yuboriladi va qoladi\n"
-            "👻 **Stealth** — xabar yuboriladi, odam o'qishi uchun 2 soniya kutadi, keyin avtomatik o'chiriladi (iz qoldirmaydi!)",
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("📤 Oddiy yuborish"), KeyboardButton("👻 Stealth (yuborib o'chirish)")]],
-                resize_keyboard=True
-            ),
-        )
-        return
-
-    elif state == "broadcast_wait_mode":
-        data = temp_broadcast_count.get(user_id, {})
-        if isinstance(data, dict):
-            msg_text = data.get("text", "")
-            count = data.get("count", 0)
-        else:
-            msg_text = ""
-            count = data
-        
-        auto_delete = "stealth" in text.lower() or "👻" in text
+        msg_text = text
+        count = temp_broadcast_count.get(user_id, 0)
         user_states[user_id] = "menu"
         temp_broadcast_count.pop(user_id, None)
 
@@ -3006,17 +2986,15 @@ async def process_messages(client, message):
 
         from pyrogram.types import ReplyKeyboardRemove as RKR
 
-        mode_name = "👻 STEALTH" if auto_delete else "📤 Oddiy"
         await send_or_edit_message(
             client,
             user_id,
             f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
-            f"🔧 Rejim: {mode_name}\n"
             "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
             reply_markup=RKR(),
         )
 
-        asyncio.create_task(broadcast_task(user_id, usernames, msg_text, auto_delete=auto_delete))
+        asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
 
     # ----- U-TAG (MENYU ORQALI) -----
     elif state == "utag_wait_group":
@@ -3080,6 +3058,76 @@ async def process_messages(client, message):
             reply_markup=main_menu(),
         )
         asyncio.create_task(utag_task(user_id, info.get("target", info["chat_id"]), utag_text))
+
+
+@bot_app.on_callback_query(filters.regex("^delete_broadcast$"))
+async def delete_broadcast_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    history_file = os.path.join(DATA_DIR, f"broadcast_history_{user_id}.json")
+    
+    if not os.path.exists(history_file):
+        await callback_query.answer("❌ O'chirish uchun xabarlar topilmadi.", show_alert=True)
+        return
+        
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            sent_messages = json.load(f)
+    except Exception:
+        sent_messages = []
+        
+    if not sent_messages:
+        await callback_query.answer("❌ O'chirish uchun xabarlar topilmadi.", show_alert=True)
+        return
+
+    await callback_query.answer("🗑️ Xabarlarni o'chirish boshlandi. Iltimos kuting...", show_alert=False)
+    
+    # Hide the button and update message text to indicate deletion process
+    try:
+        await callback_query.edit_message_text(
+            callback_query.message.text + "\n\n⏳ **Xabarlar o'chirilmoqda...**",
+            reply_markup=None
+        )
+    except:
+        pass
+        
+    deleted_count = 0
+    failed_count = 0
+    
+    # Run the deletion in background to avoid blocking callback
+    async def process_deletion():
+        nonlocal deleted_count, failed_count
+        user_client = await get_user_client_started(user_id)
+        if not user_client:
+            return
+            
+        for item in sent_messages:
+            try:
+                await user_client.delete_messages(chat_id=item["chat_id"], message_ids=item["message_id"])
+                deleted_count += 1
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 5)
+                try:
+                    await user_client.delete_messages(chat_id=item["chat_id"], message_ids=item["message_id"])
+                    deleted_count += 1
+                except:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+            await asyncio.sleep(0.5)  # To avoid aggressive flooding while deleting
+            
+        # Clean up the file
+        if os.path.exists(history_file):
+            os.remove(history_file)
+            
+        try:
+            await callback_query.message.edit_text(
+                callback_query.message.text.replace("⏳ **Xabarlar o'chirilmoqda...**", "") + 
+                f"\n\n✅ **Natija:**\n🗑️ Muvaffaqiyatli o'chirildi: **{deleted_count}** ta\n⚠️ O'chirib bo'lmadi: **{failed_count}** ta"
+            )
+        except:
+            pass
+
+    asyncio.create_task(process_deletion())
 
 
 @bot_app.on_callback_query(filters.regex("^pg:"))
@@ -3239,7 +3287,7 @@ async def add_vip_command(client, message):
             f"✅ **VIP qo'shildi!**\n\n"
             f"👤 ID: `{new_vip}`\n"
             f"⏰ Muddat: {expiry_text}\n\n"
-            f"Endi unga bot tekin ishlaydi. Dashboard'da ko'rinmaydi. 🤫"
+            f"Endi unga bot tekin ishlaydi. Dashboard'da ko'rinmaydi."
         )
     except:
         await message.reply_text("❌ Xatolik yuz berdi.")
