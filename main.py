@@ -1416,11 +1416,13 @@ async def successful_payment(client, message: Message):
         [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")]
     ])
     
+    username = f" (@{message.from_user.username})" if message.from_user.username else ""
     try:
         await bot_app.send_message(
             SUPER_ADMIN_ID,
             f"🆕 **Yangi obuna to'lovi!**\n\n"
-            f"👤 Foydalanuvchi: {first_name} (ID: `{user_id}`)\n"
+            f"👤 Foydalanuvchi: [{first_name}](tg://user?id={user_id}){username}\n"
+            f"🆔 ID: `{user_id}`\n"
             f"💰 Miqdor: {amount} Stars\n\n"
             f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
             reply_markup=markup
