@@ -11,12 +11,15 @@ import shutil
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    LabeledPrice,
+    PreCheckoutQuery,
+    Message,
 )
 from pyrogram.errors import (
     FloodWait,
@@ -182,6 +185,101 @@ DATABASE_DIR = os.path.join(DATA_DIR, "database")
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(DATABASE_DIR, exist_ok=True)
+
+# ================= SUBSCRIPTION TIZIMI =================
+SUBSCRIPTIONS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
+SUBSCRIPTION_PRICE_STARS = 150
+SUBSCRIPTION_DAYS = 30
+
+def load_subscriptions():
+    if not os.path.exists(SUBSCRIPTIONS_FILE):
+        return {}
+    try:
+        with open(SUBSCRIPTIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_subscriptions(subs):
+    with open(SUBSCRIPTIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(subs, f, indent=4)
+
+STATS_FILE = os.path.join(DATA_DIR, "stats.json")
+
+def load_stats():
+    if not os.path.exists(STATS_FILE):
+        return {"total_income": 0, "payments": [], "expired_subs": 0}
+    try:
+        with open(STATS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"total_income": 0, "payments": [], "expired_subs": 0}
+
+def save_stats(stats):
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=4)
+
+def is_subscribed(user_id):
+    if is_admin(user_id) or is_super_admin(user_id) or is_second_admin(user_id):
+        return True
+        
+    subs = load_subscriptions()
+    str_id = str(user_id)
+    if str_id not in subs:
+        return False
+        
+    expiry = subs[str_id].get("expiry", 0)
+    if time.time() > expiry:
+        return False
+    return True
+
+async def subscription_checker():
+    while True:
+        try:
+            subs = load_subscriptions()
+            now = time.time()
+            changed = False
+            
+            for user_id_str, info in list(subs.items()):
+                expiry = info.get("expiry", 0)
+                warned = info.get("warned", False)
+                
+                # Check 1 day warning (86400 seconds)
+                if not warned and 0 < expiry - now <= 86400:
+                    try:
+                        await bot_app.send_message(
+                            int(user_id_str),
+                            "⚠️ **Diqqat!**\n\nSizning botdan foydalanish obunangiz tugashiga 1 kun qoldi.\n"
+                            "Obunangiz tugagach botdan foydalana olmaysiz."
+                        )
+                        subs[user_id_str]["warned"] = True
+                        changed = True
+                    except:
+                        pass
+                        
+                # Check expiry
+                if expiry > 0 and now >= expiry:
+                    try:
+                        await bot_app.send_message(
+                            int(user_id_str),
+                            "❌ **Obunangiz tugadi!**\n\nBotdan foydalanishni davom ettirish uchun obunani yangilashingiz kerak."
+                        )
+                    except:
+                        pass
+                    del subs[user_id_str]
+                    changed = True
+                    
+                    stats = load_stats()
+                    stats["expired_subs"] = stats.get("expired_subs", 0) + 1
+                    save_stats(stats)
+                    
+            if changed:
+                save_subscriptions(subs)
+                
+        except Exception as e:
+            pass
+            
+        await asyncio.sleep(3600)  # Check every hour
 
 # User sessionlarni boshqarish
 user_clients = {}  # {user_id: Client}
@@ -1215,7 +1313,7 @@ def scraper_filter_menu():
                 KeyboardButton("⚡ Avtomatik (Tez)"),
                 KeyboardButton("📊 Xabarlar orqali (Sekin)"),
             ],
-            [KeyboardButton("🌸 Qizlar (Filtrlangan)"), KeyboardButton("👱‍♀️ Adminlar")],
+            [KeyboardButton("🌸 Qizlar (Filtrlangan)"), KeyboardButton("👱‍♂️ Adminlar")],
             [KeyboardButton("❌ Bekor qilish")],
         ],
         resize_keyboard=True,
@@ -1276,6 +1374,47 @@ async def utag_task(user_id, chat_identifier, text):
         await bot_app.send_message(user_id, f"❌ U-Tag xatosi: {e}")
     finally:
         release_task(user_id, "utag", cleanup=True)
+
+# ================= PAYMENT HANDLERLAR =================
+@bot_app.on_pre_checkout_query()
+async def pre_checkout(client, query: PreCheckoutQuery):
+    user_id = query.from_user.id
+    if is_subscribed(user_id):
+        await query.answer(ok=False, error_message="❌ Sizda allaqachon faol obuna mavjud.")
+    else:
+        await query.answer(ok=True)
+
+@bot_app.on_message(filters.successful_payment)
+async def successful_payment(client, message: Message):
+    user_id = message.from_user.id
+    subs = load_subscriptions()
+    str_id = str(user_id)
+    
+    # Calculate expiry
+    expiry = time.time() + (SUBSCRIPTION_DAYS * 86400)
+    
+    subs[str_id] = {
+        "expiry": expiry,
+        "warned": False
+    }
+    save_subscriptions(subs)
+    
+    stats = load_stats()
+    stats["total_income"] = stats.get("total_income", 0) + SUBSCRIPTION_PRICE_STARS
+    if "payments" not in stats:
+        stats["payments"] = []
+    stats["payments"].append({
+        "user_id": user_id,
+        "amount": SUBSCRIPTION_PRICE_STARS,
+        "time": time.time()
+    })
+    save_stats(stats)
+    
+    await message.reply_text(
+        "✅ **To'lov muvaffaqiyatli amalga oshirildi!**\n\n"
+        f"Siz botdan {SUBSCRIPTION_DAYS} kun davomida to'liq foydalanishingiz mumkin.\n\n"
+        "Boshlash uchun /start buyrug'ini bosing.",
+    )
 
 # ================= HANDLERLAR =================
 @bot_app.on_message(filters.command(["utag", "atag", "tagall"], prefixes=["/", ".", "!"]) & filters.group)
@@ -1391,6 +1530,19 @@ async def start_command(client, message):
         await message.reply_text(text, reply_markup=ReplyKeyboardRemove())
         return
 
+    # Subscription check
+    if not is_subscribed(user_id):
+        await client.send_invoice(
+            chat_id=user_id,
+            title="Premium Obuna",
+            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
+            payload="monthly_sub",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
+        )
+        return
+
     user_states[user_id] = "menu"
     first_name = message.from_user.first_name or "Mijoz"
 
@@ -1401,6 +1553,7 @@ async def start_command(client, message):
         "• 🚀 Scraper — guruhlardan user yig'ish\n"
         "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
         "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+        "• U-Tag - guruhdagilarni chaqirish uchun\n"
         "Quyidagi tugmalardan birini tanlang:"
     )
     await message.reply_text(text, reply_markup=main_menu())
@@ -1567,6 +1720,51 @@ async def admins_command(client, message):
 
     text += f"\n• Jami: {len(ADMIN_IDS)} ta admin"
 
+    await message.reply_text(text)
+
+
+@bot_app.on_message(filters.command("dashboard") & filters.private)
+async def dashboard_command(client, message):
+    user_id = message.from_user.id
+    if not is_super_admin(user_id):
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+        
+    subs = load_subscriptions()
+    stats = load_stats()
+    
+    try:
+        total_users = len([f for f in os.listdir(SESSIONS_DIR) if f.endswith(".session")])
+    except:
+        total_users = 0
+        
+    active_subs = len(subs)
+    expired_subs = stats.get("expired_subs", 0)
+    total_income = stats.get("total_income", 0)
+    
+    today_start = time.mktime(time.strptime(time.strftime("%Y-%m-%d 00:00:00"), "%Y-%m-%d %H:%M:%S"))
+    today_payments = 0
+    today_income = 0
+    
+    for p in stats.get("payments", []):
+        if p.get("time", 0) >= today_start:
+            today_payments += 1
+            today_income += p.get("amount", 0)
+            
+    text = (
+        "📊 **BOT DASHBOARD (Statistika)**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👥 **Foydalanuvchilar:**\n"
+        f"👤 Jami ro'yxatdan o'tganlar: **{total_users}** ta\n"
+        f"🟢 Faol obunachilar: **{active_subs}** ta\n"
+        f"🔴 Muddati tugagan obunalar: **{expired_subs}** ta\n\n"
+        "💰 **Moliya (Telegram Stars ⭐️):**\n"
+        f"💵 Barcha vaqtdagi daromad: **{total_income}** ⭐️\n"
+        f"📅 Bugungi to'lovlar soni: **{today_payments}** ta\n"
+        f"📈 Bugungi tushum: **{today_income}** ⭐️\n\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    
     await message.reply_text(text)
 
 
@@ -1933,6 +2131,24 @@ async def process_messages(client, message):
         )
         return
 
+    # Subscription check
+    if state not in [
+        "login_phone",
+        "login_code",
+        "login_password",
+        "login_upload",
+    ] and not is_subscribed(user_id):
+        await client.send_invoice(
+            chat_id=user_id,
+            title="Premium Obuna",
+            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
+            payload="monthly_sub",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
+        )
+        return
+
     # Login flow - session fayl yuborilganda
     if state == "login_upload":
         if message.document:
@@ -2145,7 +2361,8 @@ async def process_messages(client, message):
                 await send_or_edit_message(
                     client,
                     user_id,
-                    "❌ Bazangizda userlar yo'q. Avval `🚀 Scraper` orqali user yig'ing.",
+                    "❌ Bazangizda userlar yo'q. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi menyudan o'zingiz qo'shing.",
+                    reply_markup=database_menu()
                 )
                 return
             
@@ -2155,7 +2372,7 @@ async def process_messages(client, message):
                 text_msg += f"🔹 **ID:** `{db_id}` | Guruh: _{title}_ | Qoldi: **{len(info.get('users', []))}**\n"
             text_msg += "\nID raqamini yozing:"
             
-            user_states[user_id] = "wait_db_id"
+            user_states[user_id] = "wait_db_id_broadcast"
             await send_or_edit_message(
                 client,
                 user_id,
@@ -2173,7 +2390,7 @@ async def process_messages(client, message):
                     text_msg += f"🔹 **ID:** `{db_id}`\n📝 Guruh: _{title}_\n👥 Qoldi: **{len(info.get('users', []))}** ta\n🕒 Vaqt: {time_str}\n\n"
                 
                 text_msg += "Tavsilotni olish uchun bazaning ID raqamini pastga yozing:"
-                user_states[user_id] = "wait_db_id"
+                user_states[user_id] = "wait_db_id_view"
                 await send_or_edit_message(
                     client,
                     user_id,
@@ -2184,7 +2401,8 @@ async def process_messages(client, message):
                 await send_or_edit_message(
                     client,
                     user_id,
-                    "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing.",
+                    "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi tugma orqali o'zingiz qo'shing.",
+                    reply_markup=database_menu()
                 )
         elif text == "🎯 U-Tag":
             user_states[user_id] = "utag_wait_group"
@@ -2210,7 +2428,7 @@ async def process_messages(client, message):
 
     
     # ----- DATABASE SELECTION -----
-    elif state == "wait_db_id":
+    elif state == "wait_db_id_broadcast":
         if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
             user_states[user_id] = "menu"
             await send_or_edit_message(
@@ -2222,7 +2440,7 @@ async def process_messages(client, message):
         db = get_database(user_id, db_id)
         if not db:
             await send_or_edit_message(
-                client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=database_menu()
+                client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu()
             )
             return
             
@@ -2248,6 +2466,44 @@ async def process_messages(client, message):
             f"📤 Ulardan nechtasini yuboray? (Raqam kiriting)\n_Eslatma: To'liq ro'yxat bazada saqlanadi._\nID: {db_id}",
             reply_markup=broadcast_count_menu()
         )
+        return
+
+    elif state == "wait_db_id_view":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
+            )
+            return
+            
+        db_id = text.strip()
+        db = get_database(user_id, db_id)
+        if not db:
+            await send_or_edit_message(
+                client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=database_menu()
+            )
+            return
+            
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_db"] = db_id
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        users = db.get("users", [])
+        title = db.get("title", "Noma'lum")
+        
+        user_states[user_id] = "menu"
+        await send_or_edit_message(
+            client, user_id,
+            f"✅ **Baza tanlandi!**\n\n📁 Guruh: _{title}_\n👥 Jami {len(users)} ta foydalanuvchi.\n",
+            reply_markup=main_menu()
+        )
+        show_paginated_users(client, user_id, users)
         return
 
     # ----- SCRAPER (FULL OLISH) -----
@@ -2658,4 +2914,7 @@ if __name__ == "__main__":
     print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
     print(f"📊 logged_in_users initialized: {logged_in_users}")
     print("🚀 Botni ishga tushirish...")
+    
+    loop = asyncio.get_event_loop()
+    loop.create_task(subscription_checker())
     bot_app.run()
