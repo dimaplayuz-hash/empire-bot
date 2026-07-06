@@ -1413,9 +1413,11 @@ async def successful_payment(client, message: Message):
     
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"sub_approve:{user_id}")],
-        [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")]
+        [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")],
+        [InlineKeyboardButton("🔍 Umumiy guruhlar", callback_data=f"sub_common:{user_id}")]
     ])
     
+    phone = f"+{message.from_user.phone_number}" if message.from_user.phone_number else "Yashirin"
     username = f" (@{message.from_user.username})" if message.from_user.username else ""
     try:
         await bot_app.send_message(
@@ -1423,12 +1425,43 @@ async def successful_payment(client, message: Message):
             f"🆕 **Yangi obuna to'lovi!**\n\n"
             f"👤 Foydalanuvchi: [{first_name}](tg://user?id={user_id}){username}\n"
             f"🆔 ID: `{user_id}`\n"
+            f"📱 Nomer: {phone}\n"
             f"💰 Miqdor: {amount} Stars\n\n"
             f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
             reply_markup=markup
         )
     except Exception as e:
         print("Adminga xabar yuborishda xatolik:", e)
+
+
+@bot_app.on_callback_query(filters.regex("^sub_common:"))
+async def handle_sub_common(client, callback_query):
+    user_id = int(callback_query.data.split(":")[1])
+    try:
+        admin_client = None
+        if is_user_logged_in(SUPER_ADMIN_ID):
+            admin_client = await get_user_client_started(SUPER_ADMIN_ID)
+            
+        if not admin_client:
+            await callback_query.answer("Sizning user akkauntingiz botga ulanmagan. Umumiy guruhlarni ko'rish imkonsiz.", show_alert=True)
+            return
+            
+        common_chats = await admin_client.get_common_chats(user_id)
+        if not common_chats:
+            await callback_query.answer("Sizning user akkauntingiz va bu foydalanuvchi o'rtasida hech qanday umumiy guruh topilmadi.", show_alert=True)
+            return
+            
+        text = f"🔍 **Foydalanuvchi bilan umumiy guruhlar ({len(common_chats)} ta):**\n\n"
+        for i, chat in enumerate(common_chats[:50], 1):
+            text += f"{i}. {chat.title}\n"
+            
+        if len(common_chats) > 50:
+            text += f"... va yana {len(common_chats) - 50} ta guruh."
+            
+        await callback_query.message.reply_text(text)
+        await callback_query.answer()
+    except Exception as e:
+        await callback_query.answer(f"Xatolik yuz berdi. Ehtimol userbotingiz ishlamayapti: {e}", show_alert=True)
 
 
 @bot_app.on_callback_query(filters.regex("^sub_(approve|reject):"))
