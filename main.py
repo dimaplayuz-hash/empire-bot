@@ -1472,6 +1472,38 @@ async def handle_sub_common(client, callback_query):
         await callback_query.answer(f"Xatolik yuz berdi. Ehtimol userbotingiz ishlamayapti: {e}", show_alert=True)
 
 
+@bot_app.on_callback_query(filters.regex("^contact_click_track$"))
+async def handle_contact_click(client, callback_query):
+    user_id = callback_query.from_user.id
+    first_name = callback_query.from_user.first_name or "Foydalanuvchi"
+    
+    # Stats ga yozish
+    stats = load_stats()
+    stats["contact_clicks"] = stats.get("contact_clicks", 0) + 1
+    save_stats(stats)
+    
+    # Foydalanuvchini adminga yo'naltirish
+    await callback_query.message.edit_text(
+        f"✅ **Admin bilan bog'lanish uchun quyidagi havolani bosing:**\n\n"
+        f"👉 [Admin bilan yozishing](tg://user?id={SECOND_ADMIN_ID})\n\n"
+        f"Yoki to'g'ridan-to'g'ri yozing.",
+    )
+    await callback_query.answer()
+    
+    # Ikkala adminga xabar yuborish
+    admins_list = load_admins()
+    for admin_id in list(set(admins_list)):
+        try:
+            await bot_app.send_message(
+                admin_id,
+                f"📞 **Bog'lanish so'rovi!**\n\n"
+                f"👤 [{first_name}](tg://user?id={user_id}) (ID: `{user_id}`) "
+                f"admin bilan bog'lanish tugmasini bosdi.\n\n"
+                f"Ehtimol Stars orqali to'lashda muammoga duch kelgan."
+            )
+        except:
+            pass
+
 @bot_app.on_callback_query(filters.regex("^sub_(approve|reject):"))
 async def handle_sub_approval(client, callback_query):
     data_parts = callback_query.data.split(":")
@@ -1671,6 +1703,13 @@ async def start_command(client, message):
             currency="XTR",
             prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
         )
+        await client.send_message(
+            chat_id=user_id,
+            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
+            ])
+        )
         return
 
     user_states[user_id] = "menu"
@@ -1856,7 +1895,7 @@ async def admins_command(client, message):
 @bot_app.on_message(filters.command("dashboard") & filters.private)
 async def dashboard_command(client, message):
     user_id = message.from_user.id
-    if not is_super_admin(user_id):
+    if not is_admin(user_id):
         await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
         return
         
@@ -1881,6 +1920,8 @@ async def dashboard_command(client, message):
             today_payments += 1
             today_income += p.get("amount", 0)
             
+    contact_clicks = stats.get("contact_clicks", 0)
+    
     text = (
         "📊 **BOT DASHBOARD (Statistika)**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1892,6 +1933,8 @@ async def dashboard_command(client, message):
         f"💵 Barcha vaqtdagi daromad: **{total_income}** ⭐️\n"
         f"📅 Bugungi to'lovlar soni: **{today_payments}** ta\n"
         f"📈 Bugungi tushum: **{today_income}** ⭐️\n\n"
+        "📞 **Bog'lanishlar:**\n"
+        f"💬 Admin bilan bog'lanish tanlagan: **{contact_clicks}** ta\n\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )
     
@@ -2276,6 +2319,13 @@ async def process_messages(client, message):
             provider_token="",
             currency="XTR",
             prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
+        )
+        await client.send_message(
+            chat_id=user_id,
+            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
+            ])
         )
         return
 
