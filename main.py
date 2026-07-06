@@ -6,6 +6,7 @@ import asyncio
 import threading
 import sys
 import shutil
+import requests
 
 # Windows compatibility fix for asyncio and Pyrogram
 if sys.platform == "win32":
@@ -1387,34 +1388,120 @@ async def pre_checkout(client, query: PreCheckoutQuery):
 @bot_app.on_message(filters.successful_payment)
 async def successful_payment(client, message: Message):
     user_id = message.from_user.id
-    subs = load_subscriptions()
-    str_id = str(user_id)
+    charge_id = message.successful_payment.telegram_payment_charge_id
+    amount = message.successful_payment.total_amount
+    first_name = message.from_user.first_name or "Foydalanuvchi"
     
-    # Calculate expiry
-    expiry = time.time() + (SUBSCRIPTION_DAYS * 86400)
-    
-    subs[str_id] = {
-        "expiry": expiry,
-        "warned": False
+    # Pendings log
+    pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
+    try:
+        with open(pendings_file, "r") as f:
+            pendings = json.load(f)
+    except:
+        pendings = {}
+        
+    pendings[str(user_id)] = {
+        "charge_id": charge_id,
+        "amount": amount,
+        "time": time.time(),
+        "first_name": first_name
     }
-    save_subscriptions(subs)
+    with open(pendings_file, "w") as f:
+        json.dump(pendings, f, indent=4)
+        
+    await message.reply_text("⏳ **To'lov qabul qilindi.**\n\nBotdan foydalanish uchun admin tasdig'i kutilmoqda. Iltimos, biroz kuting...")
     
-    stats = load_stats()
-    stats["total_income"] = stats.get("total_income", 0) + SUBSCRIPTION_PRICE_STARS
-    if "payments" not in stats:
-        stats["payments"] = []
-    stats["payments"].append({
-        "user_id": user_id,
-        "amount": SUBSCRIPTION_PRICE_STARS,
-        "time": time.time()
-    })
-    save_stats(stats)
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"sub_approve:{user_id}")],
+        [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")]
+    ])
     
-    await message.reply_text(
-        "✅ **To'lov muvaffaqiyatli amalga oshirildi!**\n\n"
-        f"Siz botdan {SUBSCRIPTION_DAYS} kun davomida to'liq foydalanishingiz mumkin.\n\n"
-        "Boshlash uchun /start buyrug'ini bosing.",
-    )
+    try:
+        await bot_app.send_message(
+            SUPER_ADMIN_ID,
+            f"🆕 **Yangi obuna to'lovi!**\n\n"
+            f"👤 Foydalanuvchi: {first_name} (ID: `{user_id}`)\n"
+            f"💰 Miqdor: {amount} Stars\n\n"
+            f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
+            reply_markup=markup
+        )
+    except Exception as e:
+        print("Adminga xabar yuborishda xatolik:", e)
+
+
+@bot_app.on_callback_query(filters.regex("^sub_(approve|reject):"))
+async def handle_sub_approval(client, callback_query):
+    data_parts = callback_query.data.split(":")
+    action = data_parts[0].split("_")[1] # approve or reject
+    user_id_str = data_parts[1]
+    user_id = int(user_id_str)
+    
+    pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
+    try:
+        with open(pendings_file, "r") as f:
+            pendings = json.load(f)
+    except:
+        await callback_query.answer("❌ Ma'lumot topilmadi.", show_alert=True)
+        return
+        
+    if user_id_str not in pendings:
+        await callback_query.answer("❌ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
+        return
+        
+    pending_info = pendings.pop(user_id_str)
+    with open(pendings_file, "w") as f:
+        json.dump(pendings, f, indent=4)
+        
+    if action == "approve":
+        # Grant sub
+        subs = load_subscriptions()
+        expiry = time.time() + (SUBSCRIPTION_DAYS * 86400)
+        subs[user_id_str] = {
+            "expiry": expiry,
+            "warned": False
+        }
+        save_subscriptions(subs)
+        
+        # Stats
+        stats = load_stats()
+        stats["total_income"] = stats.get("total_income", 0) + pending_info["amount"]
+        if "payments" not in stats:
+            stats["payments"] = []
+        stats["payments"].append({
+            "user_id": user_id,
+            "amount": pending_info["amount"],
+            "time": time.time()
+        })
+        save_stats(stats)
+        
+        try:
+            await bot_app.send_message(
+                user_id,
+                "✅ **Admin tasdiqladi, botdan bemalol foydalanishingiz mumkin!**\n\nBoshlash uchun /start bosing."
+            )
+        except:
+            pass
+            
+        await callback_query.message.edit_text(f"✅ {pending_info['first_name']} (ID: `{user_id}`) tasdiqlandi va ruxsat berildi.")
+        
+    elif action == "reject":
+        charge_id = pending_info["charge_id"]
+        url = f"https://api.telegram.org/bot{config['BOT_TOKEN']}/refundStarPayment"
+        try:
+            requests.post(url, json={"user_id": user_id, "telegram_payment_charge_id": charge_id})
+        except Exception as e:
+            print("Refund req error:", e)
+            
+        try:
+            await bot_app.send_message(
+                user_id,
+                "❌ Xatolik: tolov qaytarildi."
+            )
+        except:
+            pass
+            
+        await callback_query.message.edit_text(f"❌ {pending_info['first_name']} (ID: `{user_id}`) rad etildi. To'lov qaytarildi.")
+
 
 # ================= HANDLERLAR =================
 @bot_app.on_message(filters.command(["utag", "atag", "tagall"], prefixes=["/", ".", "!"]) & filters.group)
