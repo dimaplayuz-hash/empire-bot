@@ -2322,7 +2322,7 @@ async def handle_login_password(client, message, user_id, password_text):
 
 @bot_app.on_message(
     filters.private
-    & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help"])
+    & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help", "add_admin", "del_admin", "add_vip", "del_vip", "add_member", "del_member", "dashboard"])
 )
 async def process_messages(client, message):
     from pyrogram.types import ReplyKeyboardRemove
