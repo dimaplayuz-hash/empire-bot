@@ -635,11 +635,14 @@ def check_flood(user_id):
 
 MENU_BUTTONS = frozenset(
     {
-        "🚀 Scraper",
-        "🔍 Guruh Qidirish",
-        "📨 Xabar yuborish",
-        "📁 Yig'ilgan userlar",
-        "🎯 U-Tag",
+        "⚡ Super Scraper",
+        "🌐 Global Qidiruv",
+        "📮 Smart Xabarnoma",
+        "💾 Yig'ilgan Bazalar",
+        "🧠 Smart Yo'llanma",
+        "🛸 Shaxsiy Profil",
+        "💎 Premium Tariflar",
+        "🧬 Avto-Inviter",
     }
 )
 
@@ -661,10 +664,10 @@ SCRAPER_FILTERS = frozenset(
 )
 
 TASK_LABELS = {
-    "scrape": "🚀 Scraper",
-    "broadcast": "📨 Xabar yuborish",
-    "search": "🔍 Guruh qidirish",
-    "utag": "🎯 U-Tag",
+    "scrape": "⚡ Super Scraper",
+    "broadcast": "📮 Smart Xabarnoma",
+    "search": "🌐 Global Qidiruv",
+    "utag": "🧠 Smart Yo'llanma",
 }
 
 DEDUP_EXEMPT = frozenset({"❌ Bekor qilish", "/cancel"})
@@ -1232,21 +1235,25 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
             if stop_flags.get(target_id):
                 break
             try:
-                sent_msg = await user_client.send_message(username, body)
+                # Remove @ prefix if present for Pyrogram
+                clean_username = username.lstrip('@')
+                sent_msg = await user_client.send_message(clean_username, body)
                 success += 1
                 if sent_msg:
                     sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
             except FloodWait as e:
                 await asyncio.sleep(e.value + 5)
                 try:
-                    sent_msg = await user_client.send_message(username, body)
+                    sent_msg = await user_client.send_message(clean_username, body)
                     success += 1
                     if sent_msg:
                         sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
                 except Exception:
                     failed += 1
-            except (PeerIdInvalid, UserPrivacyRestricted, Exception):
+            except (PeerIdInvalid, UserPrivacyRestricted, Exception) as e:
                 failed += 1
+                # Log the actual error for debugging
+                print(f"❌ Failed to send to {username}: {type(e).__name__}: {e}")
 
             current_time = time.time()
             if current_time - last_edit_time >= 2.0 or (success + failed) == total:
@@ -1312,12 +1319,10 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
 def main_menu():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🚀 Scraper"), KeyboardButton("🔍 Guruh Qidirish")],
-            [
-                KeyboardButton("📨 Xabar yuborish"),
-                KeyboardButton("📁 Yig'ilgan userlar"),
-            ],
-            [KeyboardButton("🎯 U-Tag")],
+            [KeyboardButton("⚡ Super Scraper"), KeyboardButton("🧬 Avto-Inviter")],
+            [KeyboardButton("📮 Smart Xabarnoma"), KeyboardButton("🌐 Global Qidiruv")],
+            [KeyboardButton("💾 Yig'ilgan Bazalar"), KeyboardButton("🛸 Shaxsiy Profil")],
+            [KeyboardButton("💎 Premium Tariflar"), KeyboardButton("🧠 Smart Yo'llanma")],
         ],
         resize_keyboard=True,
         placeholder="Bo'limni tanlang...",
@@ -1424,6 +1429,93 @@ async def utag_task(user_id, chat_identifier, text):
         await bot_app.send_message(user_id, f"❌ U-Tag xatosi: {e}")
     finally:
         release_task(user_id, "utag", cleanup=True)
+
+async def inviter_task(user_id, chat_identifier, target_db_id, limit):
+    client = await get_user_client_started(user_id)
+    try:
+        # Bazadan usernamelarni olish
+        json_file = get_user_json_file(user_id)
+        with open(json_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        users_to_add = data["databases"][target_db_id].get("users", [])
+        if not users_to_add:
+            await send_or_edit_message(bot_app, user_id, "❌ Bu bazada odam qolmagan.")
+            return
+
+        # Limitni tekshiramiz
+        if limit and limit < len(users_to_add):
+            users_to_add = users_to_add[:limit]
+
+        chat_id, chat_title = await resolve_chat_id(client, chat_identifier)
+        
+        from pyrogram.types import ReplyKeyboardRemove
+        await send_or_edit_message(
+            bot_app,
+            user_id,
+            f"🚀 **Avto-Inviter boshlandi!**\n\n"
+            f"Guruh: {chat_title}\n"
+            f"Qo'shiladiganlar soni: {len(users_to_add)} ta\n"
+            f"O'rtacha vaqt: {len(users_to_add) * 5} soniya\n\n"
+            f"Iltimos, kuting... To'xtatish uchun /stop bosing.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        added = 0
+        failed = 0
+        stop_flags[user_id] = False
+        batch_size = 5
+        
+        for i in range(0, len(users_to_add), batch_size):
+            if stop_flags.get(user_id):
+                await send_or_edit_message(bot_app, user_id, "🛑 Inviter to'xtatildi!")
+                break
+                
+            batch = users_to_add[i:i+batch_size]
+            
+            clean_batch = []
+            for u in batch:
+                if isinstance(u, str) and u.startswith("@"):
+                    clean_batch.append(u[1:])
+                else:
+                    clean_batch.append(u)
+                    
+            try:
+                await client.add_chat_members(chat_id, clean_batch)
+                added += len(clean_batch)
+                
+                # O'zimizning bazadan o'chirish
+                for u in batch:
+                    try:
+                        data["databases"][target_db_id]["users"].remove(u)
+                    except:
+                        pass
+                        
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                    
+                await asyncio.sleep(15) # Flood oldini olish uchun 15 sek dam
+            except FloodWait as e:
+                await send_or_edit_message(bot_app, user_id, f"⚠️ Telegram kutish vaqti. {e.value} soniya kutilmoqda...")
+                await asyncio.sleep(e.value + 5)
+            except Exception as e:
+                failed += len(clean_batch)
+                await asyncio.sleep(5)
+                
+        await send_or_edit_message(
+            bot_app,
+            user_id,
+            f"✅ **Avto-Inviter yakunlandi!**\n\n"
+            f"Muvaffaqiyatli qo'shildi: {added} ta\n"
+            f"Xatolik yoki ruxsat yo'q: {failed} ta",
+            reply_markup=main_menu()
+        )
+
+    except Exception as e:
+        err_msg = explain_telegram_error(e)
+        await send_or_edit_message(bot_app, user_id, err_msg)
+    finally:
+        release_task(user_id, "inviter", cleanup=True)
 
 # ================= PAYMENT HANDLERLAR =================
 @bot_app.on_pre_checkout_query()
@@ -1724,18 +1816,20 @@ async def start_command(client, message):
 
     # Login check
     if not is_user_logged_in(user_id):
-        # Yangi login jarayoni - telefon raqam so'rash
-        user_states[user_id] = "login_phone"
-        text = (
-            "🔐 **Botdan foydalanish uchun login qiling**\n\n"
-            "📱 **Telefon raqamingizni kiriting:**\n"
-            "Masalan: `+998901234567` yoki `998901234567`\n\n"
-            "📂 **Yoki session fayl yuboring:**\n"
-            "Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin.\n\n"
-            "❌ Bekor qilish uchun: /cancel"
+        user_states[user_id] = "wait_terms_agree"
+        terms_text = (
+            "📜 **Foydalanish shartlari va Maxfiylik Siyosati (Privacy Policy)**\n\n"
+            "Empire Bot xizmatlaridan foydalanish orqali siz quyidagilarga rozi bo'lasiz:\n"
+            "1️⃣ Bot orqali jo'natilgan xabarlar, spam yoki boshqa harakatlar uchun foydalanuvchining shaxsan o'zi javobgar.\n"
+            "2️⃣ Bot faqatgina vositachi hisoblanadi. Telegram tomonidan profilingizga tushadigan har qanday cheklov (ban/spam) uchun ma'muriyat javobgar emas.\n"
+            "3️⃣ Xavfsizligingizni ta'minlash maqsadida bot orqali kirgan akkauntingiz barcha ma'lumotlari shifrlangan tarzda faqat ushbu serverda saqlanadi.\n\n"
+            "Iltimos, botdan foydalanishni davom ettirish uchun shartlarga rozi ekanligingizni tasdiqlang."
         )
-        from pyrogram.types import ReplyKeyboardRemove
-        await message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+        from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
+        markup = ReplyKeyboardMarkup([
+            [KeyboardButton("✅ Shartlarni qabul qilaman")]
+        ], resize_keyboard=True)
+        await message.reply_text(terms_text, reply_markup=markup)
         return
 
     # Subscription check
@@ -2104,19 +2198,18 @@ def validate_phone_number(phone: str) -> str:
     # Barcha bo'sh joylar, qavslar va chiziqlarni olib tashlash
     cleaned = re.sub(r"[\s\(\)\-\.]", "", phone)
 
-    # + belgisini olib tashlash (agar bor bo'lsa)
-    if cleaned.startswith("+"):
-        cleaned = cleaned[1:]
+    # Faqat raqamlar qolganini tekshirish uchun + ni vaqtincha olib turish
+    num_only = cleaned[1:] if cleaned.startswith("+") else cleaned
 
     # Faqat raqamlar qolganini tekshirish
-    if not cleaned.isdigit():
+    if not num_only.isdigit():
         return None
 
     # Uzunligini tekshirish (7-15 raqam)
-    if len(cleaned) < 7 or len(cleaned) > 15:
+    if len(num_only) < 7 or len(num_only) > 15:
         return None
 
-    return cleaned
+    return "+" + num_only
 
 
 async def handle_login_phone(client, message, user_id, phone_text):
@@ -2329,6 +2422,8 @@ async def process_messages(client, message):
 
     user_id = message.from_user.id
     text = message.text
+    if message.contact:
+        text = message.contact.phone_number
 
     if not text:
         return
@@ -2337,8 +2432,14 @@ async def process_messages(client, message):
     state = user_states.get(user_id)
     print(f"📨 User {user_id} sent: '{text}', current state: {state}")
 
+    if text in ["❌ Bekor qilish", "/cancel"]:
+        user_states.pop(user_id, None)
+        await message.reply_text("❌ Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+        return
+
     # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat login flow state'da bo'lsa mumkin)
     if not is_user_logged_in(user_id) and state not in [
+        "wait_terms_agree",
         "login_phone",
         "login_code",
         "login_password",
@@ -2352,6 +2453,7 @@ async def process_messages(client, message):
 
     # Subscription check
     if state not in [
+        "wait_terms_agree",
         "login_phone",
         "login_code",
         "login_password",
@@ -2373,6 +2475,25 @@ async def process_messages(client, message):
                 [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
             ])
         )
+        return
+    # Login flow - Shartlarga rozi bo'lish
+    if state == "wait_terms_agree":
+        if text == "✅ Shartlarni qabul qilaman":
+            user_states[user_id] = "login_phone"
+            from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
+            markup = ReplyKeyboardMarkup([
+                [KeyboardButton("📞 Telefon raqamini yuborish", request_contact=True)],
+                [KeyboardButton("❌ Bekor qilish")]
+            ], resize_keyboard=True)
+            
+            await message.reply_text(
+                "🔌 **Sessiya ulash jarayoni boshlandi.**\n\n"
+                "Iltimos, Telegram akkauntingiz telefon raqamini kiriting (masalan: `+998901234567` formatida) "
+                "yoki pastdagi tugma orqali yuboring:",
+                reply_markup=markup
+            )
+        else:
+            await message.reply_text("Iltimos, pastdagi tugma orqali shartlarga rozi bo'ling.")
         return
 
     # Login flow - session fayl yuborilganda
@@ -2557,7 +2678,7 @@ async def process_messages(client, message):
 
     # ----- ASOSIY MENYU -----
     if state == "menu":
-        if text == "🚀 Scraper":
+        if text == "⚡ Super Scraper":
             user_states[user_id] = "scrape_wait_group"
             await send_or_edit_message(
                 client,
@@ -2572,7 +2693,7 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
 
-        elif text == "🔍 Guruh Qidirish":
+        elif text == "🌐 Global Qidiruv":
             user_states[user_id] = "search_wait_keyword"
             await send_or_edit_message(
                 client,
@@ -2581,7 +2702,7 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
 
-        elif text == "📨 Xabar yuborish" or text == "Xabar yuborish":
+        elif text == "📮 Smart Xabarnoma" or text == "Xabar yuborish":
             dbs = get_all_databases(user_id)
             if not dbs:
                 await send_or_edit_message(
@@ -2606,7 +2727,7 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
 
-        elif text == "📁 Yig'ilgan userlar":
+        elif text == "💾 Yig'ilgan Bazalar":
             dbs = get_all_databases(user_id)
             if dbs:
                 text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami guruhlar: **{len(dbs)}** ta\n\n"
@@ -2630,7 +2751,7 @@ async def process_messages(client, message):
                     "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi tugma orqali o'zingiz qo'shing.",
                     reply_markup=database_menu()
                 )
-        elif text == "🎯 U-Tag":
+        elif text == "🧠 Smart Yo'llanma":
             user_states[user_id] = "utag_wait_group"
             await send_or_edit_message(
                 client,
@@ -2641,6 +2762,72 @@ async def process_messages(client, message):
                 "• `@guruh_username`\n"
                 "• `https://t.me/guruh_username`\n\n"
                 "⚠️ Sizning user akkauntingiz o'sha guruhda bo'lishi kerak.",
+                reply_markup=cancel_menu(),
+            )
+            
+        elif text == "🛸 Shaxsiy Profil":
+            subs = load_subscriptions()
+            info = "Sizda obuna yo'q."
+            if is_admin(user_id):
+                info = "Siz Adminsiz! (Cheksiz muddat)"
+            elif str(user_id) in subs:
+                expiry = subs[str(user_id)].get("expiry", 0)
+                if expiry > time.time():
+                    import datetime
+                    exp_date = datetime.datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M')
+                    info = f"Obunangiz mavjud. Tugash vaqti: {exp_date}"
+            
+            dbs = get_all_databases(user_id)
+            total_users = sum(len(db.get("users", [])) for db in dbs.values())
+
+            await send_or_edit_message(
+                client,
+                user_id,
+                f"🛸 **Shaxsiy Profil**\n\n"
+                f"👤 **ID:** `{user_id}`\n"
+                f"👑 **Status:** {info}\n"
+                f"👥 **Yig'ilgan foydalanuvchilar:** {total_users} ta\n"
+                f"🗂 **Guruhlar bazasi:** {len(dbs)} ta",
+                reply_markup=main_menu(),
+            )
+            
+        elif text == "💎 Premium Tariflar":
+            await send_or_edit_message(
+                client,
+                user_id,
+                "💎 **Premium Tariflar**\n\n"
+                "• 1 Oylik obuna - **100 Stars** (yoki 26,000 UZS)\n\n"
+                "Bu tarifda siz quyidagi barcha imkoniyatlarga ega bo'lasiz:\n"
+                "✅ ⚡ Super Scraper (Limitsiz)\n"
+                "✅ 🧬 Avto-Inviter\n"
+                "✅ 📮 Smart Xabarnoma (Mass DM)\n"
+                "✅ 🧠 Smart Yo'llanma\n\n"
+                "To'lov qilish yoki murojaat uchun Admin bilan bog'laning.",
+                reply_markup=main_menu(),
+            )
+            
+        elif text == "🧬 Avto-Inviter":
+            dbs = get_all_databases(user_id)
+            if not dbs:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    "❌ Bazangizda userlar yo'q. Avval `⚡ Super Scraper` orqali user yig'ing.",
+                    reply_markup=database_menu()
+                )
+                return
+            
+            text_msg = f"🧬 **AVTO-INVITER**\n\nQaysi bazadagi userlarni guruhga qo'shmoqchisiz?\n\n"
+            for db_id, info in dbs.items():
+                title = info.get("title", "Noma'lum")
+                text_msg += f"🔹 **ID:** `{db_id}` | Guruh: _{title}_ | Qoldi: **{len(info.get('users', []))}**\n"
+            text_msg += "\nOdamlarni oladigan BAZA ID raqamini yozing:"
+            
+            user_states[user_id] = "wait_db_id_inviter"
+            await send_or_edit_message(
+                client,
+                user_id,
+                text_msg,
                 reply_markup=cancel_menu(),
             )
 
@@ -2693,6 +2880,103 @@ async def process_messages(client, message):
             reply_markup=broadcast_count_menu()
         )
         return
+
+    elif state == "wait_db_id_inviter":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+            return
+            
+        db_id = text.strip()
+        db = get_database(user_id, db_id)
+        if not db:
+            await send_or_edit_message(client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu())
+            return
+            
+        # Select this DB
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_inviter_db"] = db_id
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        user_states[user_id] = "inviter_wait_group"
+        await send_or_edit_message(
+            client,
+            user_id,
+            "✅ Baza tanlandi!\n\nEndi odamlar qo'shilishi kerak bo'lgan **Guruh manzilini** yuboring:\n"
+            "• `@guruh_username`\n"
+            "• Yoki yopiq guruh manzili (`https://t.me/+...`)\n\n"
+            "⚠️ Akkauntingiz shu guruhda kamida a'zo (yaxshisi admin) bo'lishi kerak.",
+            reply_markup=cancel_menu()
+        )
+
+    elif state == "inviter_wait_group":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
+            return
+            
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_inviter_target"] = text.strip()
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        user_states[user_id] = "inviter_wait_count"
+        await send_or_edit_message(
+            client, 
+            user_id, 
+            "🔢 Nechta foydalanuvchi qo'shmoqchisiz (limit kiriting, masalan: 50):", 
+            reply_markup=cancel_menu()
+        )
+
+    elif state == "inviter_wait_count":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
+            return
+
+        try:
+            limit = int(text.strip())
+            if limit <= 0: raise ValueError
+        except ValueError:
+            await send_or_edit_message(client, user_id, "❌ Iltimos, faqat to'g'ri son kiriting:")
+            return
+
+        success, current_task = acquire_task(user_id, "inviter")
+        if not success:
+            await send_or_edit_message(client, user_id, active_task_message(current_task))
+            return
+            
+        # Bazani qayta o'qib tekshirish
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            db_id = data.get("selected_inviter_db")
+            target_group = data.get("selected_inviter_target")
+        except:
+            db_id = None
+            target_group = None
+
+        if not db_id or not target_group:
+            release_task(user_id, "inviter")
+            await send_or_edit_message(client, user_id, "❌ Baza yoki manzil topilmadi.", reply_markup=main_menu())
+            return
+
+        user_states[user_id] = "menu"
+        from pyrogram.types import ReplyKeyboardRemove
+        await send_or_edit_message(client, user_id, "⏳ Guruh tekshirilmoqda...", reply_markup=ReplyKeyboardRemove())
+        asyncio.create_task(inviter_task(user_id, target_group, db_id, limit))
 
     elif state == "wait_db_id_view":
         if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
@@ -3428,6 +3712,75 @@ async def del_member_command(client, message):
             await message.reply_text("⚠️ Bu foydalanuvchi obunachi emas.")
     except:
         await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+# ================= QOROVUL VA AQLLI SOTUVCHI =================
+
+@bot_app.on_message(filters.group & filters.service)
+async def handle_service_messages(client, message):
+    """Guruhdagi service xabarlarni o'chiradi va salomlashadi/xayrlashadi"""
+    try:
+        # Yangi a'zolar qo'shilganda
+        if getattr(message, "new_chat_members", None):
+            for new_member in message.new_chat_members:
+                if new_member.is_bot:
+                    continue
+                
+                name = new_member.first_name or "A'zo"
+                mention = f"[{name}](tg://user?id={new_member.id})"
+                welcome_text = (
+                    f"Assalomu alaykum, Hurmatli {mention}!\n\n"
+                    "Bizning Empire oilamizga qo'shilganingizdan xursandmiz. Iltimos, boshqalarni va o'zingizni xurmatingizni saqlang. Istasangiz qonun qoidalar bilan quyida tanishib chiqishingiz mumkin: <link>"
+                )
+                try:
+                    await client.send_message(message.chat.id, welcome_text, disable_web_page_preview=True)
+                except:
+                    pass
+
+        # A'zo guruhdan chiqqanda
+        elif getattr(message, "left_chat_member", None):
+            left_member = message.left_chat_member
+            if not left_member.is_bot:
+                try:
+                    await client.send_message(
+                        message.chat.id, 
+                        "Oilamizni tark etayotganingizdan afsusdamiz. Yana qaytasiz deb umid qilamiz!"
+                    )
+                except:
+                    pass
+
+        # Service xabarning o'zini o'chirish
+        await message.delete()
+    except:
+        pass
+
+@bot_app.on_message(filters.group & filters.text)
+async def smart_seller(client, message):
+    """Guruhda narx so'raganlarga javob beradi va lichkasiga yozadi"""
+    # Botning o'zi yoki boshqa botlar yozsa e'tibor bermaslik
+    if not message.from_user or message.from_user.is_bot:
+        return
+        
+    text = message.text.lower()
+    
+    # Kalit so'zlar
+    keywords = ["narx", "qancha", "obuna", "sotib", "to'lov", "tolov", "tarif"]
+    if any(word in text for word in keywords):
+        try:
+            # Avval lichkaga yozishga harakat qilamiz
+            await client.send_message(
+                message.from_user.id, 
+                "💎 **Empire Bot Tariflari:**\n\n"
+                "• 1 Oylik obuna - **100 Stars** (yoki **26.000 UZS**)\n\n"
+                "Barcha VIP funksiyalar (Scraper, U-Tag, Mass DM) to'liq ochiladi.\n"
+                "To'lov qilish yoki sinab ko'rish uchun avval botimizga o'ting va **/start** bosing.\n"
+                "Savollaringiz bo'lsa adminga murojaat qiling."
+            )
+            # Agar lichkaga yozish muvaffaqiyatli bo'lsa, guruhda javob beramiz
+            await message.reply_text("Ma'lumotlarni shaxsiy xabaringizga (lichkangizga) yubordim 📩")
+        except:
+            # Lichka yopiq bo'lsa (botni start qilmagan bo'lsa)
+            await message.reply_text("Sizga ma'lumot yuborish uchun iltimos, avval botimizga kirib **/start** bosing!")
 
 
 def reset_user_session():
