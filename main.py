@@ -1974,16 +1974,9 @@ async def profile_command(client, message):
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
-    # Yordam tugmasi bilan inline keyboard - admin username orqali
-    try:
-        admin_user = await client.get_users(SUPER_ADMIN_ID)
-        admin_username = admin_user.username if admin_user.username else str(SUPER_ADMIN_ID)
-        help_url = f"https://t.me/{admin_username}"
-    except:
-        help_url = f"https://t.me/{SUPER_ADMIN_ID}"
-    
+    # Yordam tugmasi bilan inline keyboard
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❓ Yordam", url=help_url)]
+        [InlineKeyboardButton("📞 Admin bilan bog'lanish", url=f"https://t.me/{SUPER_ADMIN_ID}")]
     ])
     
     await message.reply_text(text, reply_markup=markup)
@@ -2923,7 +2916,7 @@ async def process_messages(client, message):
                 "✅ 🧬 Avto-Inviter\n"
                 "✅ 📮 Smart Xabarnoma (Mass DM)\n"
                 "✅ 🧠 Smart Yo'llanma\n\n"
-                "To'lov qilish yoki murojaat uchun Admin bilan bog'laning.",
+                "💡 **Eslatma:** Obunangiz tugaganda bot avtomatik ravishda to'lov so'raydi.",
                 reply_markup=main_menu(),
             )
             
