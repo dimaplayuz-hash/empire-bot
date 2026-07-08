@@ -2373,7 +2373,7 @@ async def process_messages(client, message):
     state = user_states.get(user_id)
     print(f"📨 User {user_id} sent: '{text}', current state: {state}")
 
-    if text in ["❌ Bekor qilish", "/cancel"]:
+    if text in ["❌ Bekor qilish", "❌ Yo'q, bekor qilish", "/cancel"]:
         user_states[user_id] = "menu"
         await send_or_edit_message(client, user_id, "❌ Bekor qilindi.", reply_markup=main_menu())
         return
