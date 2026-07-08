@@ -2545,7 +2545,7 @@ async def process_messages(client, message):
             )
             user_states[user_id] = "confirm_delete"
             return
-        elif text == "🔙 Orqaga":
+        elif text == "🔙 Orqaga" or text == "🏠 Asosiy menyu":
             user_states[user_id] = "menu"
             await send_or_edit_message(
                 client,
@@ -2554,7 +2554,6 @@ async def process_messages(client, message):
                 reply_markup=main_menu(),
             )
             return
-        return
 
     if state == "add_new_users_wait":
         usernames = re.findall(r"@?([A-Za-z0-9_]{5,32})", text)
