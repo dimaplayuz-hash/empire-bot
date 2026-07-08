@@ -1,0 +1,14 @@
+pyrogram
+tgcrypto
+deep-translator
+wikipedia
+requests
+gTTS
+psutil
+qrcode
+pyshorteners
+pillow
+python-dotenv
+yt-dlp
+beautifulsoup4
+faker
