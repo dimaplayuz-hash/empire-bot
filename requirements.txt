@@ -1,8 +1,10 @@
+Kurigram
+TgCrypto==1.2.5
+requests
 pyrogram
 tgcrypto
 deep-translator
 wikipedia
-requests
 gTTS
 psutil
 qrcode

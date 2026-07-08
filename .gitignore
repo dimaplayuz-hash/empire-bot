@@ -1,50 +1,37 @@
-# Python
+# Session files (local development uchun)
+*.session
+*.session-journal
+sessions/
+
+# Environment variables
+.env
+config.json
+
+# Database
+database/
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Pyrogram sessions
-*.session
-*.session-journal
-sessions/
-data/sessions/
-
-# Sensitive files
-config.json
-*.json
-!requirements.txt
+# Virtual environment
+venv/
+env/
+ENV/
 
 # IDE
 .vscode/
 .idea/
-.devin/
+*.swp
+*.swo
+*~
 
-# Database
-database/
-data/
+# OS
+.DS_Store
+Thumbs.db
 
-# Other
-*.old
-*.backup
-*.txt
-!requirements.txt
-
-# Subdirectories
-timer_bot/
+# Logs
+*.log
