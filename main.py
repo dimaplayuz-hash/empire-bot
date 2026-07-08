@@ -2359,7 +2359,7 @@ async def handle_login_password(client, message, user_id, password_text):
     & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help", "add_admin", "del_admin", "add_vip", "del_vip", "add_member", "del_member", "dashboard", "profile"])
 )
 async def process_messages(client, message):
-    from pyrogram.types import ReplyKeyboardRemove
+    from pyrogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 
     user_id = message.from_user.id
     text = message.text
