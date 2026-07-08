@@ -2582,29 +2582,30 @@ async def process_messages(client, message):
         if text == "✅ Ha, tasdiqlash":
             users_to_add = temp_add_users.get(user_id, [])
             if users_to_add:
-                # Add to a new DB called 'Qo'lda qo'shilganlar'
-                save_database(user_id, "Qo'lda qo'shilganlar", users_to_add)
+                # Add to a new DB with timestamp to create separate IDs
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                title = f"Qo'lda qo'shilganlar - {timestamp}"
+                save_database(user_id, title, users_to_add)
             
             user_states[user_id] = "menu"
             temp_add_users.pop(user_id, None)
             
-            usernames = load_user_database(user_id)
+            dbs = get_all_databases(user_id)
+            total_users = sum(len(db.get("users", [])) for db in dbs.values())
             await send_or_edit_message(
                 client, user_id,
                 f"✅ **{len(users_to_add)}** ta user bazaga qo'shildi!\n\n"
-                f"📁 Bazangizda jami **{len(usernames)}** ta user bor.",
+                f"📁 Bazangizda jami **{total_users}** ta user, **{len(dbs)}** ta bazada saqlanmoqda.",
                 reply_markup=database_menu(),
             )
-            show_paginated_users(client, user_id, usernames)
             
         elif text == "❌ Yo'q, bekor qilish":
             user_states[user_id] = "menu"
             temp_add_users.pop(user_id, None)
-            usernames = load_user_database(user_id)
             await send_or_edit_message(
                 client, user_id, "❌ Bekor qilindi.", reply_markup=database_menu()
             )
-            show_paginated_users(client, user_id, usernames)
         return
 
     if state == "confirm_delete":
@@ -2675,13 +2676,19 @@ async def process_messages(client, message):
         elif text == "💾 Bazalar":
             dbs = get_all_databases(user_id)
             if dbs:
-                text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami guruhlar: **{len(dbs)}** ta\n\n"
+                text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami bazalar: **{len(dbs)}** ta\n\n"
                 for db_id, info in dbs.items():
                     title = info.get("title", "Noma'lum")
                     time_str = info.get("timestamp", "Noma'lum")
-                    text_msg += f"🔹 **ID:** `{db_id}`\n📝 Guruh: _{title}_\n👥 Qoldi: **{len(info.get('users', []))}** ta\n🕒 Vaqt: {time_str}\n\n"
+                    user_count = len(info.get('users', []))
+                    text_msg += f"━━━━━━━━━━━━━━━━━━\n"
+                    text_msg += f"🆔 **Baza ID:** `{db_id}`\n"
+                    text_msg += f"📝 **Guruh nomi:** {title}\n"
+                    text_msg += f"👥 **Userlar soni:** {user_count} ta\n"
+                    text_msg += f"🕒 **Yig'ilgan vaqt:** {time_str}\n"
+                    text_msg += f"━━━━━━━━━━━━━━━━━━\n\n"
                 
-                text_msg += "Tavsilotni olish uchun bazaning ID raqamini pastga yozing:"
+                text_msg += "📌 Tavsilotni olish uchun bazaning ID raqamini yuboring:"
                 user_states[user_id] = "wait_db_id_view"
                 await send_or_edit_message(
                     client,
