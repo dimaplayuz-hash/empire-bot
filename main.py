@@ -18,8 +18,6 @@ from pyrogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    LabeledPrice,
-    PreCheckoutQuery,
     Message,
 )
 from pyrogram.errors import (
@@ -1518,96 +1516,8 @@ async def inviter_task(user_id, chat_identifier, target_db_id, limit):
         release_task(user_id, "inviter", cleanup=True)
 
 # ================= PAYMENT HANDLERLAR =================
-@bot_app.on_pre_checkout_query()
-async def pre_checkout(client, query: PreCheckoutQuery):
-    user_id = query.from_user.id
-    if is_subscribed(user_id):
-        await query.answer(ok=False, error_message="❌ Sizda allaqachon faol obuna mavjud.")
-    else:
-        await query.answer(ok=True)
-
-@bot_app.on_message(filters.successful_payment)
-async def successful_payment(client, message: Message):
-    user_id = message.from_user.id
-    charge_id = message.successful_payment.telegram_payment_charge_id
-    amount = message.successful_payment.total_amount
-    first_name = message.from_user.first_name or "Foydalanuvchi"
-    
-    # Pendings log
-    pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
-    try:
-        with open(pendings_file, "r") as f:
-            pendings = json.load(f)
-    except:
-        pendings = {}
-        
-    pendings[str(user_id)] = {
-        "charge_id": charge_id,
-        "amount": amount,
-        "time": time.time(),
-        "first_name": first_name
-    }
-    with open(pendings_file, "w") as f:
-        json.dump(pendings, f, indent=4)
-        
-    await message.reply_text("⏳ **To'lov qabul qilindi.**\n\nBotdan foydalanish uchun admin tasdig'i kutilmoqda. Iltimos, biroz kuting...")
-    
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"sub_approve:{user_id}")],
-        [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")],
-        [InlineKeyboardButton("🔍 Umumiy guruhlar", callback_data=f"sub_common:{user_id}")]
-    ])
-    
-    phone = f"+{message.from_user.phone_number}" if message.from_user.phone_number else "Yashirin"
-    username = f" (@{message.from_user.username})" if message.from_user.username else ""
-    admins_list = load_admins()
-    if SUPER_ADMIN_ID not in admins_list:
-        admins_list.append(SUPER_ADMIN_ID)
-        
-    for admin_id in list(set(admins_list)):
-        try:
-            await bot_app.send_message(
-                admin_id,
-            f"🆕 **Yangi obuna to'lovi!**\n\n"
-            f"👤 Foydalanuvchi: [{first_name}](tg://user?id={user_id}){username}\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"📱 Nomer: {phone}\n"
-            f"💰 Miqdor: {amount} Stars\n\n"
-            f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
-            reply_markup=markup
-        )
-        except Exception as e:
-            print(f"Adminga xabar yuborishda xatolik ({admin_id}):", e)
-
-
-@bot_app.on_callback_query(filters.regex("^sub_common:"))
-async def handle_sub_common(client, callback_query):
-    user_id = int(callback_query.data.split(":")[1])
-    try:
-        admin_client = None
-        if is_user_logged_in(SUPER_ADMIN_ID):
-            admin_client = await get_user_client_started(SUPER_ADMIN_ID)
-            
-        if not admin_client:
-            await callback_query.answer("Sizning user akkauntingiz botga ulanmagan. Umumiy guruhlarni ko'rish imkonsiz.", show_alert=True)
-            return
-            
-        common_chats = await admin_client.get_common_chats(user_id)
-        if not common_chats:
-            await callback_query.answer("Sizning user akkauntingiz va bu foydalanuvchi o'rtasida hech qanday umumiy guruh topilmadi.", show_alert=True)
-            return
-            
-        text = f"🔍 **Foydalanuvchi bilan umumiy guruhlar ({len(common_chats)} ta):**\n\n"
-        for i, chat in enumerate(common_chats[:50], 1):
-            text += f"{i}. {chat.title}\n"
-            
-        if len(common_chats) > 50:
-            text += f"... va yana {len(common_chats) - 50} ta guruh."
-            
-        await callback_query.message.reply_text(text)
-        await callback_query.answer()
-    except Exception as e:
-        await callback_query.answer(f"Xatolik yuz berdi. Ehtimol userbotingiz ishlamayapti: {e}", show_alert=True)
+# Note: Pyrogram does not support on_pre_checkout_query directly
+# Payment handling needs to be implemented differently
 
 
 @bot_app.on_callback_query(filters.regex("^contact_click_track$"))
@@ -1974,9 +1884,16 @@ async def profile_command(client, message):
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
-    # Yordam tugmasi bilan inline keyboard
+    # Yordam tugmasi bilan inline keyboard - admin username orqali
+    try:
+        admin_user = await client.get_users(SUPER_ADMIN_ID)
+        admin_username = admin_user.username if admin_user.username else str(SUPER_ADMIN_ID)
+        help_url = f"https://t.me/{admin_username}"
+    except:
+        help_url = f"https://t.me/{SUPER_ADMIN_ID}"
+    
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📞 Admin bilan bog'lanish", url=f"https://t.me/{SUPER_ADMIN_ID}")]
+        [InlineKeyboardButton("❓ Yordam", url=help_url)]
     ])
     
     await message.reply_text(text, reply_markup=markup)
@@ -2916,7 +2833,7 @@ async def process_messages(client, message):
                 "✅ 🧬 Avto-Inviter\n"
                 "✅ 📮 Smart Xabarnoma (Mass DM)\n"
                 "✅ 🧠 Smart Yo'llanma\n\n"
-                "💡 **Eslatma:** Obunangiz tugaganda bot avtomatik ravishda to'lov so'raydi.",
+                "To'lov qilish yoki murojaat uchun Admin bilan bog'laning.",
                 reply_markup=main_menu(),
             )
             
@@ -3934,4 +3851,3 @@ if __name__ == "__main__":
     
     loop = asyncio.get_event_loop()
     loop.create_task(subscription_checker())
-    bot_app.run()
