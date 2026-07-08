@@ -2582,11 +2582,20 @@ async def process_messages(client, message):
         if text == "✅ Ha, tasdiqlash":
             users_to_add = temp_add_users.get(user_id, [])
             if users_to_add:
-                # Add to a new DB with timestamp to create separate IDs
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-                title = f"Qo'lda qo'shilganlar - {timestamp}"
-                save_database(user_id, title, users_to_add)
+                # Add to existing 'Qo'lda qo'shilganlar' database or create new one
+                dbs = get_all_databases(user_id)
+                existing_db_id = None
+                for db_id, info in dbs.items():
+                    if info.get("title", "").startswith("Qo'lda qo'shilganlar"):
+                        existing_db_id = db_id
+                        break
+                
+                if existing_db_id:
+                    # Add to existing database
+                    save_database(user_id, "Qo'lda qo'shilganlar", users_to_add, db_id=existing_db_id)
+                else:
+                    # Create new database
+                    save_database(user_id, "Qo'lda qo'shilganlar", users_to_add)
             
             user_states[user_id] = "menu"
             temp_add_users.pop(user_id, None)
