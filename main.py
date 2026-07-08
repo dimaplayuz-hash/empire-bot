@@ -1,3362 +1,3944 @@
-"""
-Vento Userbot — toza qayta yozilgan versiya.
-Barcha buyruqlar saqlangan (AI funksiyalar olib tashlangan).
-"""
-import asyncio
-import gc
-import io
-import json
 import os
-import random
-import string
-import threading
+import re
 import time
-from collections import defaultdict
-from datetime import datetime, timedelta
-
-import psutil
-import pyshorteners
-import qrcode
-import requests
-import wikipedia
-from deep_translator import GoogleTranslator
-from gtts import gTTS
-from pyrogram import Client, filters, utils as pyrogram_utils
-from pyrogram.enums import ChatAction, ChatType, ParseMode
-from pyrogram.errors import AuthKeyUnregistered, FloodWait, MessageNotModified, PeerIdInvalid
-from pyrogram.raw import functions, types
-from pyrogram.raw.functions.contacts import Search
-from pyrogram.types import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
-
-# Pyrogram 2.0.x eski ID chegaralari yangi kanal/guruhlarda ValueError beradi
-pyrogram_utils.MIN_CHANNEL_ID = -1007852516352
-pyrogram_utils.MIN_CHAT_ID = -999999999999
-
-
-def _get_peer_type(peer_id: int) -> str:
-    peer_id_str = str(peer_id)
-    if not peer_id_str.startswith("-"):
-        return "user"
-    if peer_id_str.startswith("-100"):
-        return "channel"
-    return "chat"
-
-
-pyrogram_utils.get_peer_type = _get_peer_type
-
-# Noma'lum/eskirgan peer yangilanishlarida bot yiqilmasligi uchun
-from pyrogram import Client as _PyrogramClient
-
-_orig_handle_updates = _PyrogramClient.handle_updates
-
-
-async def _safe_handle_updates(self, updates):
-    try:
-        await _orig_handle_updates(self, updates)
-    except ValueError as e:
-        if "Peer id invalid" not in str(e):
-            raise
-    except PeerIdInvalid:
-        pass
-
-
-_PyrogramClient.handle_updates = _safe_handle_updates
-
-from bot_data import (
-    STARTUP_BANNER,
-    apply_font,
-    confetti,
-    get_hack_frames,
-    get_unhack_frames,
-    hearts,
-    moons,
-    quiz_data,
-    zalgo_chars,
-)
-
-# ── Sozlama ──────────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-USERBOT_SESSION_DIR = os.path.join(BASE_DIR, "sessions")
-os.makedirs(USERBOT_SESSION_DIR, exist_ok=True)
-
-api_id = 36427121
-api_hash = "f4b857c7d7e08dce9244615ef32d7cc7"
-
-app = Client(
-    "vento_userbot_v2",
-    api_id=api_id,
-    api_hash=api_hash,
-    workdir=USERBOT_SESSION_DIR,
-)
-
-from pytgcalls import GroupCallFactory
-from pytgcalls.implementation.group_call_base import GroupCallBase
-
-# Avtomatik reconnect'ni o'chiramiz — aks holda FloodWait cheksiz loop hosil qiladi
-async def _no_reconnect(self):
-    pass
-
-GroupCallBase.reconnect = _no_reconnect
-
-group_call = None
-
-import imageio_ffmpeg as _iio_ff
-FFMPEG_PATH = _iio_ff.get_ffmpeg_exe()
-
-
-def cmd(names):
-    if isinstance(names, str):
-        names = [names]
-
-    def func(flt, _client, message):
-        text = message.text or message.caption
-        if not text:
-            return False
-        for name in flt.names:
-            prefix = "." + name
-            if text.startswith(prefix):
-                if len(text) == len(prefix) or text[len(prefix)].isspace():
-                    message.command = [name] + text[len(prefix):].split()
-                    return True
-        return False
-
-    return filters.create(func, names=names)
-
-
-async def edit_msg(message, text, **kwargs):
-    try:
-        if message.from_user and message.from_user.is_self and not message.media:
-            return await message.edit_text(text, **kwargs)
-        return await message.reply_text(text, **kwargs)
-    except Exception:
-        try:
-            return await message.reply_text(text, **kwargs)
-        except Exception:
-            return None
-
-
-def load_json(path):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-
-
-def parse_delay(time_str):
-    time_str = time_str.lower()
-    if time_str.endswith("s"):
-        return int(time_str[:-1])
-    if time_str.endswith("m"):
-        return int(time_str[:-1]) * 60
-    if time_str.endswith("h"):
-        return int(time_str[:-1]) * 3600
-    raise ValueError("noto'g'ri vaqt")
-
-
-def is_complex_name(name):
-    score = len(name)
-    for char in name:
-        if not char.isalnum() and char not in (" ", "-", "_"):
-            score += 2
-    return score
-
-
-def estimate_year(uid):
-    ranges = [
-        (1000000, "2013 yil, Avgust"),
-        (10000000, "2013 yil, Oktyabr"),
-        (30000000, "2014 yil, Yanvar"),
-        (50000000, "2014 yil, Iyul"),
-        (100000000, "2015 yil, Mart"),
-        (200000000, "2016 yil, Aprel"),
-        (300000000, "2017 yil, Mart"),
-        (500000000, "2018 yil, Fevral"),
-        (800000000, "2019 yil, Yanvar"),
-        (1200000000, "2020 yil, Yanvar"),
-        (2000000000, "2021 yil, Yanvar"),
-        (3500000000, "2022 yil, Yanvar"),
-        (5500000000, "2023 yil, Fevral"),
-        (6500000000, "2024 yil, Fevral"),
-        (7500000000, "2025 yil, Yanvar"),
-        (9000000000, "2026 yil, Yanvar"),
-    ]
-    for max_id, period in ranges:
-        if uid < max_id:
-            return period
-    return "2026 yil (Juda yangi profil)"
-
-
-# ── Global holat ─────────────────────────────────────────────────────────
-start_time = time.time()
-wikipedia.set_lang("uz")
-
-is_afk = False
-afk_reason = ""
-tagging_active = False
-autobio_running = False
-anti_raid_chats = {}
-raid_spammers = {}
-message_cache = {}
-cleaner_pending = {}
-original_profile = {}
-hacked_users = set()
-anti_flood_active = False
-flood_warnings = defaultdict(int)
-last_message_time = defaultdict(list)
-active_quiz = {}
-active_guess = {}
-active_rps = {}
-ghost_users = set()
-double_users = set()
-double_msg_map = {}
-autotr_data = {"active": False, "lang": "en"}
-is_typing = {}
-gap_tasks = {}
-
-FLOOD_LIMIT = 5
-FLOOD_TIME = 3
-STICKERS_FILE = os.path.join(BASE_DIR, "stickers.json")
-NOTES_FILE = os.path.join(BASE_DIR, "notes.json")
-EDIT_SLOTS_FILE = os.path.join(BASE_DIR, "edit_slots.json")
-
-my_stickers = load_json(STICKERS_FILE)
-my_notes = load_json(NOTES_FILE)
-edit_slots = load_json(EDIT_SLOTS_FILE)
-
-TAGFUN_PHRASES = [
-    "kelarsiz endi kutyabmiz 🤝",
-    "kibr bolmasez kelasz 🗿",
-    "bildik kotarilibsiz 👍",
-    "o'qib otirgandan foyda yo 🫡",
-    "koringlar kim keldi 🤩",
-    "jimsiz tinchlikmi? 🤔",
-    "bizni ham eslab turing 🫂",
-    "kelaqoling endi sog'indik 🥺",
-    "qachongacha kutamiz ⏳",
-    "yana uxlayabsizmi 😴",
-    "bir choylashaylik ☕️",
-    "profilingizga qarab o'tiribman, kirsangiz o'lamizmi? 💀",
-    "guruhda boru, hayotda yo'q odamlar toifasidanmisiz? 👻",
-    "sizni ko'rish qiyin bo'lib ketdi, nima, qidiruvdamisiz? 🕵️‍♂️",
-    "online bo'la turib yozmaganingiz uchun 5 minut guruhni yuvib bering 🧹",
-    "shunchalik band ekansiz, keyingi safar guruhga kirishingizga qizil yo'lakcha to'shaylikmi? 🎪",
-    "siz yozguncha sochim oqardi, tezroq kiring ",
-    "guruhga bir kiring, sizsiz g'iybatlar qizimayapti 🤫",
-    "boyib ketib bizni unutganlar ro'yxatida birinchi o'rindasiz 🪙",
-    "tirikligingiz haqida bitta stiker tashlab qo'ying hech bo'lmasa 🧟‍♂️",
-    "yozmasangiz ham o'qib o'tirganingizni bilaman, sekin ekranni silliqlayvering 📱",
-    "kelajakdan kelgan xabarchi, nega jimsiz? 🚀",
-    "biz sizni kutyapmiz, siz esa kimdir bilan lichkada kulishyapsiz, shumi qadrimiz? 🚬",
-    "kirsangiz pul beraman (hazil, shunchaki kiring) 💸",
-    "xuddi 100 ta proekti bor odamdek bandsiz-a? 👀",
-    "guruhga kirishingiz uchun ruxsatnoma kerakmi deyman? 🎫",
-    "notiqlik san'ati kurslarida dars beryapsizmi, buncha jimlik? 🎤",
-    "siz yozguncha Telegram yangi yangilanish chiqarib yuboradi 🛠️",
-    "lichkada dars qilyapsizmi deyman, guruhga ham qarab qo'ying 📚",
-    "shuncha odam kutyapti, siz esa kinodagi bosh qahramondek kechikasiz 🎬",
-    "guruh faoli degan statusni sotib olgandirsiz balki? 🎖️",
-    "bitta 'salom' deb yozish pullik bo'lib qoldimi sizga? 💶",
-    "profilingiz boru, lekin o'zingiz arxivda qolib ketgandeksiz📦",
-    "sizni chaqiraverib botning ham matoriga kuch keldi 🏍️",
-    "guruhga kirib bir 'skrinshot' tushib keting, esdalikka qoladi 📸",
-    "chatni faqat o'qish rejimida yoqib qo'yganmisiz? 📖",
-    "sizni guruhga olib kirish uchun maxsus taklifnoma jo'nataylikmi? ✉️",
-    "siz yozmasangiz guruh quruq cho'lga aylanib ketyapti 🏜️",
-    "yozing, internetingiz megabaytini bot to'lab beradi (yolg'on) 🌐",
-    "VIP personamiz qayerlarda yuribdilar ekan? 👑",
-    "bitta harf yozsangiz ham mayli, tirik ekanligingizni bilaylik 🦕",
-    "shuncha odam ichida faqat siz yo'qsiz, svet o'chib qoldimi? 💡",
-    "sizni kutib guruhdagilar qarib ketishdi, nabirali bo'ldik mana 🧑‍🦳",
-    "lichkangizda navbat ko'pmi deyman, bizga qachon navbat keladi? 🚶‍♂️",
-    "guruhga bitta kirib o'ting, baraka kirsin guruhga ✨"
-]
-
-
-# ── Fon handlerlari ──────────────────────────────────────────────────────
-@app.on_message(filters.group, group=1)
-async def cache_messages(_client, message):
-    chat_id = message.chat.id
-    if chat_id not in message_cache:
-        message_cache[chat_id] = {}
-    text = message.text or message.caption or "[Media/Stiker]"
-    user_id = message.from_user.id if message.from_user else None
-    username = (
-        f"@{message.from_user.username}"
-        if message.from_user and message.from_user.username
-        else "Username yo'q"
-    )
-    first_name = message.from_user.first_name if message.from_user else "Noma'lum"
-    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    message_cache[chat_id][message.id] = (text, user_id, username, first_name, timestamp)
-    if len(message_cache[chat_id]) > 1000:
-        for old_id in sorted(message_cache[chat_id].keys())[:100]:
-            del message_cache[chat_id][old_id]
-
-
-@app.on_message(~filters.me & (filters.private | filters.mentioned), group=2)
-async def afk_reply(_client, message):
-    if is_afk:
-        await message.reply_text(
-            f"**Avto-javob:**\nHozir bandman 💤\nSabab: {afk_reason}"
-        )
-
-
-@app.on_message(~filters.me & filters.group & ~filters.bot, group=3)
-async def check_flood(client, message):
-    if not anti_flood_active or not message.from_user:
-        return
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    now = time.time()
-    last_message_time[user_id] = [t for t in last_message_time[user_id] if now - t < FLOOD_TIME]
-    last_message_time[user_id].append(now)
-    if len(last_message_time[user_id]) < FLOOD_LIMIT:
-        return
-    flood_warnings[(chat_id, user_id)] += 1
-    warnings = flood_warnings[(chat_id, user_id)]
-    try:
-        if warnings == 1:
-            await client.send_message(
-                chat_id,
-                f"⚠️ **Ogohlantirish!** [{message.from_user.first_name}](tg://user?id={user_id}), spam qilmang!",
-            )
-            await client.delete_messages(chat_id, message.id)
-        else:
-            await client.restrict_chat_member(
-                chat_id,
-                user_id,
-                ChatPermissions(can_send_messages=False),
-                until_date=datetime.now() + timedelta(hours=1),
-            )
-            await client.send_message(
-                chat_id,
-                f"🚫 [{message.from_user.first_name}](tg://user?id={user_id}) 1 soatga cheklandi.",
-            )
-            flood_warnings[(chat_id, user_id)] = 0
-    except Exception:
-        pass
-
-
-@app.on_message(filters.new_chat_members, group=4)
-async def anti_raid_handler(client, message):
-    chat_id = message.chat.id
-    if chat_id not in anti_raid_chats or not anti_raid_chats[chat_id]:
-        return
-    if chat_id not in raid_spammers:
-        raid_spammers[chat_id] = []
-    for member in message.new_chat_members:
-        username = f"@{member.username}" if member.username else "Username yo'q"
-        first_name = member.first_name or "Ism yo'q"
-        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        raid_spammers[chat_id].append((member.id, username, first_name, timestamp))
-        try:
-            await client.restrict_chat_member(
-                chat_id,
-                member.id,
-                ChatPermissions(
-                    can_send_messages=False,
-                    can_send_media_messages=False,
-                    can_send_other_messages=False,
-                    can_add_web_page_previews=False,
-                    can_send_polls=False,
-                    can_change_info=False,
-                    can_invite_users=False,
-                    can_pin_messages=False,
-                ),
-            )
-        except Exception:
-            try:
-                await client.ban_chat_member(chat_id, member.id)
-            except Exception:
-                pass
-
-
-@app.on_message(filters.text, group=6)
-async def check_quiz_answer(client, message):
-    chat_id = message.chat.id
-    if chat_id not in active_quiz or not message.text:
-        return
-    q = active_quiz[chat_id]
-    if message.text.strip().lower() in [a.lower() for a in q["alt"]]:
-        winner = message.from_user.first_name if message.from_user else "Kimdir"
-        await client.send_message(
-            chat_id,
-            f"🎉 **To'g'ri javob!** {winner} yutdi!\n✅ Javob: **{q['a']}**",
-        )
-        del active_quiz[chat_id]
-
-
-@app.on_message(filters.text, group=7)
-async def check_guess(client, message):
-    chat_id = message.chat.id
-    if chat_id not in active_guess:
-        return
-    game = active_guess[chat_id]
-    if not message.reply_to_message or message.reply_to_message.id != game["msg_id"]:
-        return
-    if not message.text.isdigit():
-        return
-    user_guess = int(message.text)
-    game["attempts"] += 1
-    num = game["number"]
-    if user_guess == num:
-        winner = message.from_user.first_name if message.from_user else "Kimdir"
-        await client.send_message(
-            chat_id,
-            f"🎉 **Tabriklaymiz!** {winner} topdi!\nSon: **{num}**, urinishlar: {game['attempts']}",
-        )
-        del active_guess[chat_id]
-    elif user_guess < num:
-        await client.edit_message_text(
-            chat_id,
-            game["msg_id"],
-            f"🔢 Sonni top!\n❌ {user_guess} — **kattaroq** son o'ylaganman!",
-        )
-    else:
-        await client.edit_message_text(
-            chat_id,
-            game["msg_id"],
-            f"🔢 Sonni top!\n❌ {user_guess} — **kichikroq** son o'ylaganman!",
-        )
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-@app.on_message(filters.text, group=8)
-async def check_rps(client, message):
-    chat_id = message.chat.id
-    if chat_id not in active_rps:
-        return
-    game = active_rps[chat_id]
-    if not message.reply_to_message or message.reply_to_message.id != game["msg_id"]:
-        return
-    text = message.text.lower().replace("'", "").replace("'", "").replace("o`", "o").replace("g`", "g")
-    if text not in ("tosh", "qaychi", "qogoz", "qog'oz"):
-        return
-    if text == "qog'oz":
-        text = "qogoz"
-    user_id = message.from_user.id
-    updated = False
-    if user_id == game["u1_id"] and not game["u1_choice"]:
-        game["u1_choice"] = text
-        updated = True
-    elif user_id == game["u2_id"] and not game["u2_choice"]:
-        game["u2_choice"] = text
-        updated = True
-    if not updated:
-        return
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    if game["u1_choice"] and game["u2_choice"]:
-        c1, c2 = game["u1_choice"], game["u2_choice"]
-        u1, u2 = game["u1_name"], game["u2_name"]
-        if c1 == c2:
-            winner = "🤝 **Durang!**"
-        elif (c1, c2) in (("tosh", "qaychi"), ("qaychi", "qogoz"), ("qogoz", "tosh")):
-            winner = f"🎉 **G'olib:** {u1}"
-        else:
-            winner = f"🎉 **G'olib:** {u2}"
-        emojis = {"tosh": "🪨 Tosh", "qaychi": "✂️ Qaychi", "qogoz": "📄 Qog'oz"}
-        result = (
-            f"🎮 **Tosh-Qaychi-Qog'oz tugadi!**\n\n{winner}\n\n"
-            f"👤 {u1}: {emojis[c1]}\n👤 {u2}: {emojis[c2]}"
-        )
-        await client.edit_message_text(chat_id, game["msg_id"], result)
-        del active_rps[chat_id]
-    else:
-        who = game["u1_name"] if game["u1_choice"] else game["u2_name"]
-        wait = game["u2_name"] if game["u1_choice"] else game["u1_name"]
-        await client.edit_message_text(
-            chat_id,
-            game["msg_id"],
-            f"🎮 **O'yin!**\n✅ {who} tanladi.\n⏳ Navbat: **{wait}**",
-        )
-
-
-@app.on_message(filters.me & filters.text & ~filters.command(["autotr", "help"], prefixes="."), group=9)
-async def autotr_interceptor(client, message):
-    if not autotr_data["active"] or not message.text or message.text.startswith("."):
-        return
-    try:
-        translated = GoogleTranslator(source="auto", target=autotr_data["lang"]).translate(message.text)
-        await message.edit_text(translated)
-    except Exception:
-        pass
-
-
-@app.on_message(filters.private & ~filters.me, group=10)
-async def ghost_interceptor(client, message):
-    if message.from_user and message.from_user.id in ghost_users:
-        try:
-            await client.forward_messages("me", message.chat.id, message.id)
-        except Exception:
-            pass
-
-
-@app.on_message(~filters.me, group=11)
-async def double_interceptor(client, message):
-    if not message.from_user or message.from_user.id not in double_users:
-        return
-    try:
-        sent = None
-        if message.text:
-            sent = await client.send_message(message.chat.id, message.text)
-        elif message.sticker:
-            sent = await client.send_sticker(message.chat.id, message.sticker.file_id)
-        if sent:
-            double_msg_map[message.id] = (message.chat.id, sent.id)
-    except Exception:
-        pass
-
-
-@app.on_deleted_messages(group=12)
-async def double_deleted_interceptor(client, messages):
-    for msg in messages:
-        if msg.id in double_msg_map:
-            chat_id, our_id = double_msg_map.pop(msg.id)
-            try:
-                await client.delete_messages(chat_id, our_id)
-            except Exception:
-                pass
-
-
-@app.on_message(filters.me & filters.text & filters.reply, group=13)
-async def cleaner_confirm(client, message):
-    chat_id = message.chat.id
-    if chat_id not in cleaner_pending:
-        return
-    pending = cleaner_pending[chat_id]
-    if not message.reply_to_message or message.reply_to_message.id != pending["message_id"]:
-        return
-    if message.text.lower() != "y":
-        return
-    await message.delete()
-    deleted_count = inactive_count = failed_count = 0
-    for acc in pending["deleted"]:
-        try:
-            await client.ban_chat_member(chat_id, acc["id"])
-            deleted_count += 1
-            await asyncio.sleep(0.3)
-        except Exception:
-            failed_count += 1
-    for acc in pending["inactive"]:
-        try:
-            await client.ban_chat_member(chat_id, acc["id"])
-            inactive_count += 1
-            await asyncio.sleep(0.3)
-        except Exception:
-            failed_count += 1
-    result = (
-        f"✅ **TOZALASH TUGADI!**\n\n"
-        f"🗑 O'lik: {deleted_count}\n💀 Faol emas: {inactive_count}\n"
-    )
-    if failed_count:
-        result += f"❌ Xatoliklar: {failed_count}\n"
-    await client.send_message(chat_id, result, reply_to_message_id=pending["message_id"])
-    del cleaner_pending[chat_id]
-
-
-# ═══════════════════════ ASOSIY BUYRUQLAR ═══════════════════════
-@app.on_message(filters.me & cmd("ping"))
-async def ping_cmd(_c, m):
-    await edit_msg(m, "Pong! 🏓 Userbot ishlayapti.")
-
-
-@app.on_message(filters.me & cmd("salom"))
-async def salom_cmd(_c, m):
-    await edit_msg(m, "Assalomu alaykum! Men o'z ishimni bajarishga tayyorman 🤖")
-
-
-@app.on_message(filters.me & cmd("yoz"))
-async def yoz_cmd(client, m):
-    try:
-        count = int(m.command[1])
-        text = m.text.split(maxsplit=2)[2]
-        await m.delete()
-        for _ in range(count):
-            await client.send_message(m.chat.id, text)
-            await asyncio.sleep(0.1)
-    except Exception:
-        await edit_msg(m, "Xatolik: `.yoz 5 xabar`")
-
-
-async def _remote_edit_message(client, m, chat_id, msg_id, text):
-    try:
-        await client.edit_message_text(chat_id, msg_id, text)
-        await edit_msg(m, f"✅ Tahrir qilindi!\n`{chat_id}` / `{msg_id}`")
-    except Exception as e:
-        await edit_msg(m, f"❌ Tahrir bo'lmadi: {e}")
-
-
-@app.on_message(filters.me & cmd("tahrir"))
-async def tahrir_cmd(client, m):
-    args = m.command[1:]
-    if not args:
-        return await edit_msg(
-            m,
-            "**Mute paytida guruhda yozish:**\n\n"
-            "1️⃣ Oldin guruhda `.` yuboring, reply + `.tahrir save`\n"
-            "2️⃣ Mute bo'lgach **Saved Messages** ga:\n"
-            "   `.tahrir 1 yangi matn`\n\n"
-            "Yoki forward qilingan xabarga reply:\n"
-            "`.tahrir yangi matn`\n\n"
-            "Yoki to'g'ridan-to'g'ri:\n"
-            "`.tahrir chat_id msg_id matn`\n\n"
-            "`.tahrir list` — saqlangan slotlar",
-        )
-
-    if args[0] == "list":
-        if not edit_slots:
-            return await edit_msg(m, "Slotlar bo'sh. Guruhda `.tahrir save` ishlating.")
-        lines = [
-            f"**{slot}** → `{data['chat_id']}` / `{data['msg_id']}`"
-            for slot, data in sorted(edit_slots.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
-        ]
-        return await edit_msg(m, "📌 **Saqlangan slotlar:**\n" + "\n".join(lines))
-
-    if args[0] == "save":
-        if not m.reply_to_message:
-            return await edit_msg(m, "O'z xabaringizga reply qiling!")
-        if not m.reply_to_message.from_user or not m.reply_to_message.from_user.is_self:
-            return await edit_msg(m, "Faqat o'z xabaringizni saqlash mumkin!")
-        slot = args[1] if len(args) > 1 and args[1].isdigit() else "1"
-        edit_slots[slot] = {"chat_id": m.chat.id, "msg_id": m.reply_to_message.id}
-        save_json(EDIT_SLOTS_FILE, edit_slots)
-        return await edit_msg(
-            m,
-            f"✅ Slot **{slot}** saqlandi.\n"
-            f"Mute bo'lsa Saved Messages ga:\n`.tahrir {slot} matn`",
-        )
-
-    if args[0] in edit_slots and len(args) >= 2:
-        slot = args[0]
-        text = m.text.split(maxsplit=2)[2]
-        data = edit_slots[slot]
-        return await _remote_edit_message(client, m, data["chat_id"], data["msg_id"], text)
-
-    if m.reply_to_message:
-        reply = m.reply_to_message
-        text = m.text.split(maxsplit=1)[1]
-        if reply.forward_from_chat and reply.forward_from_message_id:
-            return await _remote_edit_message(
-                client,
-                m,
-                reply.forward_from_chat.id,
-                reply.forward_from_message_id,
-                text,
-            )
-        if reply.from_user and reply.from_user.is_self:
-            return await _remote_edit_message(client, m, m.chat.id, reply.id, text)
-
-    if len(args) >= 3 and args[0].lstrip("-").isdigit() and args[1].isdigit():
-        chat_id = int(args[0])
-        msg_id = int(args[1])
-        text = m.text.split(maxsplit=3)[3]
-        return await _remote_edit_message(client, m, chat_id, msg_id, text)
-
-    await edit_msg(m, "❌ Noto'g'ri format. `.tahrir` — yordam uchun.")
-
-
-@app.on_message(filters.me & cmd("ochir"))
-async def ochir_cmd(client, m):
-    try:
-        count = int(m.command[1]) if len(m.command) > 1 else 0
-        await m.delete()
-        ids, deleted = [], 0
-        async for msg in client.get_chat_history(m.chat.id, limit=500):
-            if msg.from_user and msg.from_user.is_self:
-                ids.append(msg.id)
-                deleted += 1
-                if len(ids) == 100:
-                    await client.delete_messages(m.chat.id, ids)
-                    ids = []
-                    await asyncio.sleep(1)
-                if count > 0 and deleted >= count:
-                    break
-        if ids:
-            await client.delete_messages(m.chat.id, ids)
-    except Exception as e:
-        await client.send_message("me", f"O'chirishda xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("echo"))
-async def echo_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "❌ `.echo Salom`")
-    text = m.text.split(maxsplit=1)[1]
-    await m.delete()
-    await client.send_message(m.chat.id, text)
-
-
-@app.on_message(filters.me & cmd("type"))
-async def type_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Matn kiritmadingiz!"
-    typing_text = ""
-    for char in text:
-        typing_text += char
-        try:
-            await m.edit_text(typing_text + "▒")
-            await asyncio.sleep(0.1)
-        except Exception:
-            pass
-    await edit_msg(m, typing_text)
-
-
-@app.on_message(filters.me & cmd("dance"))
-async def dance_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1].lower() if len(m.command) > 1 else "matn"
-    try:
-        for _ in range(5):
-            for i, ch in enumerate(text):
-                if ch.isalpha():
-                    try:
-                        await m.edit_text(text[:i] + ch.upper() + text[i + 1 :])
-                        await asyncio.sleep(0.3)
-                    except FloodWait as e:
-                        await asyncio.sleep(e.value)
-                    except Exception:
-                        pass
-        await edit_msg(m, text.capitalize())
-    except Exception as e:
-        await edit_msg(m, f"Xatolik: {e}")
-
-
-GAP_SPACER_TIGHT = "⠀"
-GAP_SPACER_WIDE = "⠀ ⠀ ⠀ ⠀ ⠀"
-
-
-def _part_from_message(message):
-    if message.sticker:
-        return {"type": "sticker", "file_id": message.sticker.file_id}
-    if message.text:
-        return {"type": "text", "value": message.text}
-    if message.caption:
-        return {"type": "text", "value": message.caption}
-    return None
-
-
-async def _collect_gap_parts(client, message):
-    parts = []
-
-    if message.reply_to_message:
-        reply = message.reply_to_message
-        if reply.media_group_id:
-            group_msgs = [reply]
-            async for msg in client.get_chat_history(message.chat.id, limit=50):
-                if msg.media_group_id == reply.media_group_id and msg.id != reply.id:
-                    group_msgs.append(msg)
-            group_msgs.sort(key=lambda x: x.id)
-            for msg in group_msgs:
-                part = _part_from_message(msg)
-                if part:
-                    parts.append(part)
-        else:
-            part = _part_from_message(reply)
-            if part:
-                parts.append(part)
-
-    if len(message.command) > 1:
-        for token in message.text.split(maxsplit=1)[1].split():
-            if token.lower() == "stop":
-                continue
-            if token in my_stickers:
-                parts.append({"type": "sticker", "file_id": my_stickers[token]})
-            else:
-                parts.append({"type": "text", "value": token})
-
-    return parts
-
-
-async def _gap_text_loop(client, chat_id, parts):
-    texts = [p["value"] for p in parts]
-    msg = await client.send_message(chat_id, " ".join(texts))
-    wide = False
-    while True:
-        try:
-            body = "  ".join(texts) if wide else " ".join(texts)
-            await msg.edit_text(body)
-            wide = not wide
-            await asyncio.sleep(0.45)
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await asyncio.sleep(0.8)
-
-
-async def _gap_mixed_loop(client, chat_id, parts):
-    spacers = []
-    for i, part in enumerate(parts):
-        if i > 0:
-            spacer = await client.send_message(chat_id, GAP_SPACER_WIDE)
-            spacers.append(spacer.id)
-        if part["type"] == "text":
-            await client.send_message(chat_id, part["value"])
-        else:
-            await client.send_sticker(chat_id, part["file_id"])
-
-    wide = True
-    while True:
-        spacer_text = GAP_SPACER_WIDE if wide else GAP_SPACER_TIGHT
-        for spacer_id in spacers:
-            try:
-                await client.edit_message_text(chat_id, spacer_id, spacer_text)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-        wide = not wide
-        await asyncio.sleep(0.45)
-
-
-async def _run_gap_animation(client, chat_id, parts):
-    try:
-        if all(p["type"] == "text" for p in parts):
-            await _gap_text_loop(client, chat_id, parts)
-        else:
-            await _gap_mixed_loop(client, chat_id, parts)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        if gap_tasks.get(chat_id) is asyncio.current_task():
-            gap_tasks.pop(chat_id, None)
-
-
-@app.on_message(filters.me & cmd("gap"))
-async def gap_cmd(client, m):
-    chat_id = m.chat.id
-
-    if len(m.command) > 1 and m.command[1].lower() == "stop":
-        task = gap_tasks.pop(chat_id, None)
-        if task:
-            task.cancel()
-        return await edit_msg(m, "🛑 Gap animatsiya to'xtatildi.")
-
-    parts = await _collect_gap_parts(client, m)
-    if len(parts) < 2:
-        return await edit_msg(
-            m,
-            "Kamida **2 ta** qism kerak!\n\n"
-            "`.gap salom dunyo`\n"
-            "`.gap stiker1 stiker2` — saqlangan stiker nomlari\n"
-            "Stiker(lar)ga reply + `.gap`\n"
-            "To'xtatish: `.gap stop`",
-        )
-
-    if chat_id in gap_tasks:
-        gap_tasks[chat_id].cancel()
-
-    try:
-        await m.delete()
-    except Exception:
-        pass
-
-    task = asyncio.create_task(_run_gap_animation(client, chat_id, parts))
-    gap_tasks[chat_id] = task
-
-
-@app.on_message(filters.me & cmd("tr"))
-async def tr_cmd(_c, m):
-    try:
-        if len(m.command) < 2:
-            return await edit_msg(m, "`.tr uz` — reply bilan")
-        lang = m.command[1]
-        if not m.reply_to_message or not m.reply_to_message.text:
-            return await edit_msg(m, "Tarjima uchun xabarga reply qiling.")
-        translated = GoogleTranslator(source="auto", target=lang).translate(m.reply_to_message.text)
-        await edit_msg(m, f"**Tarjima ({lang}):**\n{translated}")
-    except Exception as e:
-        await edit_msg(m, f"Tarjima xatoligi: {e}")
-
-
-@app.on_message(filters.me & cmd("wiki"))
-async def wiki_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "Nimani qidirishni yozing: `.wiki Toshkent` yoki `.wiki en Python`")
-    
-    args = m.text.split(maxsplit=2)
-    if len(args) > 2 and args[1] in ["uz", "ru", "en"]:
-        lang = args[1]
-        query = args[2]
-    else:
-        lang = "uz"
-        query = m.text.split(maxsplit=1)[1]
-        
-    await m.edit_text(f"🔍 {lang.upper()} Vikipediyadan qidirilmoqda...")
-    wikipedia.set_lang(lang)
-    
-    try:
-        result = wikipedia.summary(query, sentences=4)
-        text = f"**📚 Vikipediya ({lang.upper()}):** {query}\n\n{result}"
-        if len(text) > 4000:
-            text = text[:4000] + "..."
-        await edit_msg(m, text)
-    except wikipedia.exceptions.DisambiguationError as e:
-        options = ", ".join(e.options[:5]) if e.options else ""
-        await edit_msg(m, f"Ko'p ma'noli so'z. Aniqroq yozing. Masalan:\n{options}")
-    except wikipedia.exceptions.PageError:
-        if lang != "en":
-            try:
-                wikipedia.set_lang("en")
-                result = wikipedia.summary(query, sentences=4)
-                text = f"**📚 Vikipediya (EN - {lang} da topilmagani uchun):** {query}\n\n{result}"
-                if len(text) > 4000:
-                    text = text[:4000] + "..."
-                await edit_msg(m, text)
-            except Exception:
-                await edit_msg(m, "Hech narsa topilmadi 😔")
-        else:
-            await edit_msg(m, "Hech narsa topilmadi 😔")
-    except Exception as e:
-        await edit_msg(m, f"Xatolik yuz berdi: {e}")
-
-
-@app.on_message(filters.me & cmd("afk"))
-async def afk_cmd(_c, m):
-    global is_afk, afk_reason
-    is_afk = True
-    afk_reason = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Sabab ko'rsatilmagan"
-    await edit_msg(m, f"💤 AFK. Sabab: {afk_reason}")
-
-
-@app.on_message(filters.me & cmd("unafk"))
-async def unafk_cmd(_c, m):
-    global is_afk, afk_reason
-    is_afk = False
-    afk_reason = ""
-    await edit_msg(m, "✅ AFK dan chiqdingiz!")
-
-
-@app.on_message(filters.me & cmd("stoptag"))
-async def stoptag_cmd(_c, m):
-    global tagging_active
-    tagging_active = False
-    await edit_msg(m, "🛑 Belgilash to'xtatildi!")
-
-
-@app.on_message(filters.me & cmd(["tagall", "all"]))
-async def tagall_cmd(client, m):
-    global tagging_active
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if tagging_active:
-        return await edit_msg(m, "Allaqachon ketyapti! `.stoptag`")
-    tagging_active = True
-    tag_text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else ""
-    await edit_msg(m, "📢 Belgilash boshlanmoqda... `.stoptag`")
-    try:
-        members = []
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            if member.user.is_bot or member.user.is_deleted:
-                continue
-            u = member.user
-            # Real @username bor bo'lsa uni ishlatamiz, yo'q bo'lsa invisible mention
-            if u.username:
-                members.append(f"@{u.username}")
-            else:
-                name = (u.first_name or "User")[:20].replace("[", "(").replace("]", ")")
-                members.append(f"[{name}](tg://user?id={u.id})")
-
-        # Har birini ALOHIDA xabar qilib yuboramiz — xuddi inson qo'lda tag qilgandek
-        for mention in members:
-            if not tagging_active:
-                break
-            body = f"{tag_text}\n{mention}" if tag_text else mention
-            await client.send_message(m.chat.id, body)
-            await asyncio.sleep(1.2)
-        tagging_active = False
-        await m.delete()
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 10)
-        tagging_active = False
-    except Exception as e:
-        tagging_active = False
-        await client.send_message("me", f"Tagall xato: {e}")
-
-
-@app.on_message(filters.me & cmd("tagfun"))
-async def tagfun_cmd(client, m):
-    global tagging_active
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if tagging_active:
-        return await edit_msg(m, "Allaqachon ketyapti!")
-    tagging_active = True
-    await edit_msg(m, "🤪 Qiziqarli belgilash...")
-    try:
-        seen = set()
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            if not tagging_active:
-                break
-            u = member.user
-            if u.is_bot or u.is_deleted or u.id in seen:
-                continue
-            seen.add(u.id)
-            name = (u.first_name or "User").replace("<", "").replace(">", "")
-            mention = f"<a href='tg://user?id={u.id}'>{name[:30]}</a>"
-            phrase = random.choice(TAGFUN_PHRASES)
-            await client.send_message(m.chat.id, f"{mention} {phrase}", parse_mode=ParseMode.HTML)
-            await asyncio.sleep(3)
-        tagging_active = False
-        await m.delete()
-    except Exception as e:
-        tagging_active = False
-        await client.send_message("me", f"Tagfun xato: {e}")
-
-
-@app.on_message(filters.me & cmd("gtag"))
-async def gtag_cmd(client, m):
-    global tagging_active
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if tagging_active:
-        return await edit_msg(m, "Allaqachon ketyapti! `.stoptag`")
-    tagging_active = True
-    
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Diqqat!"
-    await edit_msg(m, "👻 Yashirin belgilash boshlandi... `.stoptag`")
-    
-    try:
-        members = []
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            if member.user.is_bot or member.user.is_deleted:
-                continue
-            members.append(member.user.id)
-            
-        for i in range(0, len(members), 50):
-            if not tagging_active:
-                break
-            chunk = members[i : i + 50]
-            mentions = "".join([f"[\u200b](tg://user?id={uid})" for uid in chunk])
-            await client.send_message(m.chat.id, f"{text}{mentions}")
-            await asyncio.sleep(2)
-            
-        tagging_active = False
-        await m.delete()
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 10)
-    except Exception as e:
-        tagging_active = False
-        await client.send_message("me", f"Gtag xato: {e}")
-
-
-@app.on_message(filters.me & cmd("bombtag"))
-async def bombtag_cmd(client, m):
-    global tagging_active
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if tagging_active:
-        return await edit_msg(m, "Allaqachon ketyapti! `.stoptag`")
-    tagging_active = True
-    await edit_msg(m, "💣 Bomba-belgilash boshlandi... (har biriga bildirishnoma boradi)")
-    try:
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            if not tagging_active:
-                break
-            if member.user.is_bot or member.user.is_deleted:
-                continue
-            mention = f"[\u200b](tg://user?id={member.user.id})"
-            msg = await client.send_message(m.chat.id, f"{mention}🚨")
-            await asyncio.sleep(0.3)
-            await msg.delete()
-            await asyncio.sleep(0.2)
-        tagging_active = False
-        await edit_msg(m, "✅ Bomba-belgilash tugadi.")
-    except Exception as e:
-        tagging_active = False
-        await client.send_message("me", f"Bombtag xato: {e}")
-
-
-# ─── SCRAPER: username yig'ib, DM yuborish ───
-scraper_collected = []  # global yig'ilgan username list
-
-@app.on_message(filters.me & cmd("scraper"))
-async def scraper_cmd(client, m):
-    global scraper_collected
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    
-    sub = m.command[1].lower() if len(m.command) > 1 else "scan"
-    
-    # ─── .scraper scan: guruhdan username yig'ish ───
-    if sub == "scan":
-        await m.edit_text("🔍 Guruh skanlanmoqda...")
-        usernames = []
-        no_username = 0
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            u = member.user
-            if u.is_bot or u.is_deleted:
-                continue
-            if u.username:
-                usernames.append(f"@{u.username}")
-            else:
-                no_username += 1
-        
-        scraper_collected = usernames
-        report = (
-            f"📊 **Skaner natijasi:**\n"
-            f"✅ Username bor: {len(usernames)} ta\n"
-            f"❌ Username yo'q: {no_username} ta\n\n"
-            + "\n".join(usernames[:50])
-            + (f"\n... va yana {len(usernames)-50} ta" if len(usernames) > 50 else "")
-        )
-        await client.send_message("me", report)
-        await edit_msg(m, f"✅ {len(usernames)} ta username topildi va 'Saved Messages' ga yuborildi!\nDM yuborish uchun: `.scraper dm [xabar matni]`")
-    
-    # ─── .scraper dm [matn]: yig'ilganlarga DM yuborish ───
-    elif sub == "dm":
-        if not scraper_collected:
-            return await edit_msg(m, "⚠️ Avval `.scraper scan` qiling!")
-        if len(m.command) < 3:
-            return await edit_msg(m, "`.scraper dm [yubormoqchi xabar]`")
-        
-        msg_text = m.text.split(maxsplit=2)[2]
-        total = len(scraper_collected)
-        sent = 0
-        failed = 0
-        
-        await m.edit_text(f"🚀 {total} ta odamga DM yuborilmoqda...")
-        
-        for username in scraper_collected:
-            try:
-                await client.send_message(username, msg_text)
-                sent += 1
-                await asyncio.sleep(1.5)  # flood protection
-            except FloodWait as e:
-                await asyncio.sleep(e.value + 5)
-            except Exception:
-                failed += 1
-        
-        stats = (
-            f"📨 **DM yuborish natijasi:**\n"
-            f"✅ Yuborildi: {sent} ta\n"
-            f"❌ Yuborilmadi: {failed} ta\n"
-            f"📊 Jami: {total} ta"
-        )
-        await client.send_message("me", stats)
-        await edit_msg(m, f"✅ Yuborildi: **{sent}** | Muvaffaqiyatsiz: **{failed}**")
-    
-    # ─── .scraper list: yig'ilganlarni ko'rish ───
-    elif sub == "list":
-        if not scraper_collected:
-            return await edit_msg(m, "Hali hech narsa skanlanmagan. `.scraper scan` qiling.")
-        text = f"📝 **Yig'ilgan usernames ({len(scraper_collected)} ta):**\n" + "\n".join(scraper_collected[:100])
-        if len(scraper_collected) > 100:
-            text += f"\n... va yana {len(scraper_collected)-100} ta"
-        await edit_msg(m, text)
-    
-    else:
-        await edit_msg(m, "🛠 **Scraper buyruqlari:**\n`.scraper scan` — username yig'ish\n`.scraper list` — ro'yxatni ko'rish\n`.scraper dm [matn]` — hammaga DM yuborish")
-
-
-@app.on_message(filters.me & cmd("ring"))
-async def ring_cmd(client, m):
-    global tagging_active
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if tagging_active:
-        return await edit_msg(m, "Allaqachon ketyapti! `.stoptag`")
-    tagging_active = True
-    
-    count = int(m.command[1]) if len(m.command) > 1 and m.command[1].isdigit() else 5
-    count = min(count, 15)  # Limit to 15 rings to avoid flood waits
-    
-    await edit_msg(m, f"🔔 Zang chalish boshlandi ({count} marta)... `.stoptag`")
-    
-    try:
-        members = []
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            if not member.user.is_bot and not member.user.is_deleted:
-                members.append(member.user.id)
-                
-        # Send rapid tags to create a "ringing/buzzing" effect
-        for c in range(count):
-            if not tagging_active:
-                break
-            
-            for i in range(0, len(members), 40):
-                if not tagging_active:
-                    break
-                chunk = members[i : i + 40]
-                mentions = "".join([f"[\u200b](tg://user?id={uid})" for uid in chunk])
-                msg = await client.send_message(m.chat.id, f"☎️{mentions}")
-                await msg.delete()
-                await asyncio.sleep(0.3)
-            await asyncio.sleep(1) # small pause between rings
-            
-        tagging_active = False
-        await edit_msg(m, "✅ Zang chalish tugadi.")
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 2)
-        tagging_active = False
-    except Exception as e:
-        tagging_active = False
-        await client.send_message("me", f"Ring xato: {e}")
-
-
-
-
-
-@app.on_message(filters.me & cmd("st"))
-async def st_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.photo:
-        return await edit_msg(m, "Rasmga reply qiling!")
-    await m.edit_text("⏳ Stiker yasalmoqda...")
-    try:
-        path = await client.download_media(m.reply_to_message.photo, file_name="temp_sticker.jpg")
-        await client.send_document(m.chat.id, path, file_name="sticker.webp", reply_to_message_id=m.reply_to_message.id)
-        await m.delete()
-        os.remove(path)
-    except Exception as e:
-        await edit_msg(m, f"Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("time"))
-async def time_cmd(_c, m):
-    now = datetime.now()
-    await edit_msg(m, f"⏱ **Vaqt:** {now.strftime('%H:%M:%S')}\n📅 **Sana:** {now.strftime('%d.%m.%Y')}")
-
-
-@app.on_message(filters.me & cmd(["weather", "obhavo"]))
-async def weather_cmd(client, m):
-    if len(m.command) > 1:
-        city = m.text.split(maxsplit=1)[1]
-    else:
-        try:
-            ip_info = requests.get("http://ip-api.com/json/", timeout=5).json()
-            city = ip_info.get("city", "Tashkent") if ip_info.get("status") == "success" else None
-        except Exception:
-            city = None
-        if not city:
-            return await edit_msg(m, "Shahar kiriting: `.weather Toshkent`")
-    await m.edit_text("⛅️ Tekshirilmoqda...")
-    try:
-        req = requests.get(f"https://wttr.in/{city.replace(' ', '+')}?format=%l:+%c+%t,+%w,+Namlik:+%h")
-        if req.status_code == 200:
-            await client.send_message("me", f"🌍 **Ob-havo ({city}):**\n\n{req.text.strip()}")
-            await edit_msg(m, "✅ Saqlangan xabarlarga yuborildi!")
-        else:
-            await edit_msg(m, "Shahar topilmadi.")
-    except Exception:
-        await edit_msg(m, "Internet xatosi!")
-
-
-@app.on_message(filters.me & cmd("count"))
-async def count_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Foydalanuvchi xabariga reply qiling!")
-    target = m.reply_to_message.from_user
-    await m.edit_text(f"⏳ **{target.first_name}** hisoblanmoqda...")
-    count = 0
-    try:
-        async for msg in client.search_messages(m.chat.id, query="", from_user=target.id):
-            count += 1
-    except Exception:
-        async for msg in client.get_chat_history(m.chat.id, limit=2000):
-            if msg.from_user and msg.from_user.id == target.id:
-                count += 1
-    await client.send_message("me", f"📊 **{target.first_name}** — {count} ta xabar")
-    await edit_msg(m, "✅ Statistika yuborildi!")
-
-
-@app.on_message(filters.me & cmd("history"))
-async def history_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    target = m.reply_to_message.from_user
-    oldest = None
-    try:
-        async for msg in client.search_messages(m.chat.id, query="", from_user=target.id):
-            oldest = msg
-    except Exception:
-        async for msg in client.get_chat_history(m.chat.id, limit=2000):
-            if msg.from_user and msg.from_user.id == target.id:
-                oldest = msg
-    if not oldest:
-        return await edit_msg(m, "Xabar topilmadi.")
-    preview = (oldest.text[:100] + "...") if oldest.text and len(oldest.text) > 100 else (oldest.text or "Media")
-    text = (
-        f"📜 **Tarix — {target.first_name}**\n📅 {oldest.date.strftime('%d.%m.%Y %H:%M')}\n"
-        f"💬 {preview}\n🔗 {oldest.link or 'Havola yoq'}"
-    )
-    await client.send_message("me", text, disable_web_page_preview=True)
-    await edit_msg(m, "✅ Yuborildi!")
-
-
-@app.on_message(filters.me & cmd("setname"))
-async def setname_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.setname Ism`")
-    cool = apply_font(m.text.split(maxsplit=1)[1])
-    try:
-        await client.update_profile(first_name=cool)
-        await edit_msg(m, f"✅ Ism: **{cool}**")
-    except Exception as e:
-        await edit_msg(m, f"Xatolik: {e}")
-
-
-def autobio_loop():
-    global autobio_running
-    while autobio_running:
-        try:
-            now = datetime.now().strftime("%H:%M")
-            try:
-                ip = requests.get("http://ip-api.com/json/", timeout=5).json()
-                city = ip.get("city", "Tashkent")
-            except Exception:
-                city = "Tashkent"
-            cpu = psutil.cpu_percent()
-            bio = f"🕒 {now} | 📍 {city} | 💻 CPU: {cpu}%"
-            asyncio.run_coroutine_threadsafe(app.update_profile(bio=bio[:70]), app.loop).result()
-            time.sleep(120)
-        except FloodWait as e:
-            time.sleep(e.value + 10)
-        except Exception:
-            time.sleep(120)
-
-
-@app.on_message(filters.me & cmd("autobio"))
-async def autobio_cmd(_c, m):
-    global autobio_running
-    if len(m.command) > 1 and m.command[1] == "on":
-        if not autobio_running:
-            autobio_running = True
-            threading.Thread(target=autobio_loop, daemon=True).start()
-        await edit_msg(m, "✅ Auto-Bio yoqildi!")
-    elif len(m.command) > 1 and m.command[1] == "off":
-        autobio_running = False
-        await edit_msg(m, "❌ Auto-Bio o'chirildi.")
-    else:
-        await edit_msg(m, "`.autobio on` / `.autobio off`")
-
-
-@app.on_message(filters.me & cmd("save"))
-async def save_cmd(_c, m):
-    if len(m.command) < 2 or not m.reply_to_message or not m.reply_to_message.sticker:
-        return await edit_msg(m, "Stikerga reply: `.save nom`")
-    name = m.command[1].lower()
-    my_stickers[name] = m.reply_to_message.sticker.file_id
-    save_json(STICKERS_FILE, my_stickers)
-    await edit_msg(m, f"✅ **{name}** saqlandi! `.s {name}`")
-
-
-@app.on_message(filters.me & cmd("s"))
-async def s_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.s nom`")
-    name = m.command[1].lower()
-    if name not in my_stickers:
-        return await edit_msg(m, f"❌ **{name}** topilmadi.")
-    try:
-        await m.delete()
-        rid = m.reply_to_message.id if m.reply_to_message else None
-        await client.send_sticker(m.chat.id, my_stickers[name], reply_to_message_id=rid)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("list"))
-async def list_cmd(_c, m):
-    if not my_stickers:
-        return await edit_msg(m, "Baza bo'sh.")
-    text = "📦 **Stikerlar:**\n" + "\n".join(f"• **{k}** (`.s {k}`)" for k in my_stickers)
-    await edit_msg(m, text)
-
-
-@app.on_message(filters.me & cmd("sclear"))
-async def sclear_cmd(_c, m):
-    my_stickers.clear()
-    save_json(STICKERS_FILE, my_stickers)
-    await edit_msg(m, "✅ Baza tozalandi!")
-
-
-@app.on_message(filters.me & cmd("observe"))
-async def observe_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    u = m.reply_to_message.from_user
-    uid = u.id
-    
-    await m.edit_text("🔍 Chuqur tahlil qilinmoqda...")
-    try:
-        # Full user data extraction using raw API for deep secrets
-        full_user = await client.invoke(functions.users.GetFullUser(id=await client.resolve_peer(uid)))
-        raw_u = full_user.users[0]
-        f_u = full_user.full_user
-        
-        try:
-            photos = await client.get_chat_photos_count(uid)
-        except Exception:
-            photos = "?"
-            
-        common = f_u.common_chats_count
-        bio = f_u.about or "Yozilmagan"
-        
-        dc = raw_u.photo.dc_id if hasattr(raw_u, 'photo') and raw_u.photo else "?"
-        dc_map = {1: "Miami 🇺🇸", 2: "Amsterdam 🇳🇱", 4: "Amsterdam 🇳🇱", 5: "Singapur 🇸🇬"}
-        dc_name = dc_map.get(dc, "?") if dc != "?" else "?"
-        
-        mutual = "✅ HA (Sizni kontaktga qo'shgan!)" if getattr(raw_u, 'mutual_contact', getattr(raw_u, 'contact', False)) else "❌ Yo'q"
-        scam = "⚠️ HA (Firibgar)" if getattr(raw_u, 'scam', False) else "Yo'q"
-        fake = "⚠️ HA (Soxta)" if getattr(raw_u, 'fake', False) else "Yo'q"
-        restricted = "⚠️ HA" if getattr(raw_u, 'restricted', False) else "Yo'q"
-        reasons = "Yo'q"
-        if getattr(raw_u, 'restriction_reason', None):
-            reasons = ", ".join([f"{r.reason} ({getattr(r, 'platform', 'all')})" for r in raw_u.restriction_reason])
-        
-        # Exact online time parsing if available
-        status_info = "Yashirilgan / Eski"
-        if hasattr(raw_u, 'status') and hasattr(raw_u.status, 'was_online'):
-            exact_time = datetime.fromtimestamp(raw_u.status.was_online).strftime('%Y-%m-%d %H:%M:%S')
-            status_info = exact_time
-        
-        uname = f"@{u.username}" if u.username else "Yo'q"
-        prem = "Ha" if getattr(raw_u, 'premium', False) else "Yo'q"
-        
-        info = (
-            f"🕵️‍♂️ **CHUQUR TAHLIL (DEEP OBSERVE)**\n\n"
-            f"👤 **Ism:** {u.first_name or ''} {u.last_name or ''}\n"
-            f"🔗 **Username:** {uname}\n"
-            f"🆔 **ID:** `{uid}`\n"
-            f"📅 **Taxminiy ro'yxatdan o'tgan:** {estimate_year(uid)}\n\n"
-            f"⭐️ **Premium:** {prem}\n"
-            f"🏢 **Server (DC):** DC{dc} — {dc_name}\n"
-            f"📸 **Rasmlar tarixi:** {photos} ta\n"
-            f"👥 **Umumiy chatlar:** {common} ta\n"
-            f"📝 **Bio:** `{bio}`\n"
-            f"⏱ **Aniq oxirgi faollik:** `{status_info}`\n\n"
-            f"📞 **Kontaktda saqlaganmi?:** {mutual}\n"
-            f"🚩 **Scam (Firibgar) belgi:** {scam}\n"
-            f"👻 **Fake (Soxta) belgi:** {fake}\n"
-            f"🚫 **Cheklovlar:** {restricted}\n"
-            f"ℹ️ **Cheklov sababi:** `{reasons}`"
-        )
-        await client.send_message("me", info)
-        await edit_msg(m, "✅ Chuqur tahlil 'Saqlangan xabarlar' ga yuborildi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd(["sys", "alive"]))
-async def sys_cmd(_c, m):
-    up = int(time.time() - start_time)
-    h, r = divmod(up, 3600)
-    mi, s = divmod(r, 60)
-    await edit_msg(
-        m,
-        f"🤖 **Userbot Faol!**\n⏳ `{h}s {mi}m {s}s`\n"
-        f"🧠 CPU: `{psutil.cpu_percent()}%`\n💾 RAM: `{psutil.virtual_memory().percent}%`",
-    )
-
-
-@app.on_message(filters.me & cmd(["tts", "voice"]))
-async def voice_cmd(client, m):
-    args = m.text.split(maxsplit=2)
-    if len(args) < 2:
-        return await edit_msg(m, "`.voice matn` yoki `.voice en Hello`")
-        
-    lang = "ru"
-    text = ""
-    
-    if len(args) > 2 and len(args[1]) <= 3 and args[1].isalpha():
-        lang = args[1].lower()
-        text = args[2]
-    else:
-        text = m.text.split(maxsplit=1)[1]
-        
-    await m.edit_text(f"🎤 Ovoz ({lang})...")
-    path = os.path.join(BASE_DIR, "voice.mp3")
-    try:
-        gTTS(text, lang=lang).save(path)
-        rid = m.reply_to_message.id if m.reply_to_message else None
-        await client.send_voice(m.chat.id, path, reply_to_message_id=rid)
-        await m.delete()
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
-
-
-# ═══════════════════════ ADMIN / XAVFSIZLIK ═══════════════════════
-@app.on_message(filters.me & cmd("ban"))
-async def ban_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP) or not m.reply_to_message:
-        return await edit_msg(m, "Guruhda reply bilan!")
-    try:
-        uid = m.reply_to_message.from_user.id
-        await client.ban_chat_member(m.chat.id, uid)
-        await edit_msg(m, f"🔨 **{m.reply_to_message.from_user.first_name}** ban!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("mute"))
-async def mute_cmd(client, m):
-    try:
-        if m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-            if not m.reply_to_message:
-                return await edit_msg(m, "Reply qiling!")
-            uid = m.reply_to_message.from_user.id
-            await client.restrict_chat_member(
-                m.chat.id, uid, ChatPermissions(can_send_messages=False),
-                until_date=datetime.now() + timedelta(hours=1),
-            )
-            await edit_msg(m, f"🔇 1 soat mute!")
-        elif m.chat.type == ChatType.PRIVATE:
-            await client.invoke(
-                functions.account.UpdateNotifySettings(
-                    peer=await client.resolve_peer(m.chat.id),
-                    settings=types.InputPeerNotifySettings(mute_until=2147483647),
-                )
-            )
-            await edit_msg(m, "🔇 Bildirishnomalar o'chirildi.")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("unmute"))
-async def unmute_cmd(client, m):
-    try:
-        if m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-            if not m.reply_to_message:
-                return await edit_msg(m, "Reply qiling!")
-            uid = m.reply_to_message.from_user.id
-            await client.restrict_chat_member(m.chat.id, uid, ChatPermissions(can_send_messages=True))
-            await edit_msg(m, "🔊 Unmute!")
-        elif m.chat.type == ChatType.PRIVATE:
-            await client.invoke(
-                functions.account.UpdateNotifySettings(
-                    peer=await client.resolve_peer(m.chat.id),
-                    settings=types.InputPeerNotifySettings(mute_until=0),
-                )
-            )
-            await edit_msg(m, "🔊 Bildirishnomalar yoqildi.")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("block"))
-async def block_cmd(client, m):
-    try:
-        uid = m.chat.id if m.chat.type == ChatType.PRIVATE else (
-            m.reply_to_message.from_user.id if m.reply_to_message else None
-        )
-        if uid:
-            await client.block_user(uid)
-            await edit_msg(m, "🚫 Block qilindi!")
-        else:
-            await edit_msg(m, "Shaxsiy chat yoki reply kerak.")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("unblock"))
-async def unblock_cmd(client, m):
-    try:
-        uid = m.chat.id if m.chat.type == ChatType.PRIVATE else (
-            m.reply_to_message.from_user.id if m.reply_to_message else None
-        )
-        if uid:
-            await client.unblock_user(uid)
-            await edit_msg(m, "✅ Unblock!")
-        else:
-            await edit_msg(m, "Shaxsiy chat yoki reply kerak.")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("clone"))
-async def clone_cmd(client, m):
-    global original_profile
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    target = m.reply_to_message.from_user
-    await m.edit_text("⏳ Klonlanmoqda...")
-    try:
-        me = await client.get_me()
-        if not original_profile:
-            original_profile = {
-                "first_name": me.first_name or "",
-                "last_name": me.last_name or "",
-                "bio": (await client.get_chat(me.id)).bio or "",
-            }
-        info = await client.get_chat(target.id)
-        await client.update_profile(
-            first_name=target.first_name or "", last_name=target.last_name or "", bio=info.bio or "",
-        )
-        if target.photo:
-            photo = await client.download_media(target.photo.big_file_id)
-            await client.set_profile_photo(photo=photo)
-            os.remove(photo)
-        await edit_msg(m, f"🎭 **{target.first_name}** klonlandi! `.revert` bilan qaytish")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("revert"))
-async def revert_cmd(client, m):
-    if not original_profile:
-        return await edit_msg(m, "❌ Eski profil saqlanmagan.")
-    try:
-        await client.update_profile(**original_profile)
-        await edit_msg(m, "✅ Asl profilga qaytdingiz!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("getid"))
-async def getid_cmd(_c, m):
-    if not m.reply_to_message:
-        return await edit_msg(m, "Reply qiling!")
-    msg = m.reply_to_message
-    fid = msg.photo or msg.sticker or msg.animation or msg.video or msg.document or msg.voice or msg.audio
-    if fid:
-        await edit_msg(m, f"📁 **ID:** `{fid.file_id}`")
-    else:
-        await edit_msg(m, "Media topilmadi.")
-
-
-@app.on_message(filters.me & cmd("password"))
-async def password_cmd(_c, m):
-    length = int(m.command[1]) if len(m.command) > 1 and m.command[1].isdigit() else 12
-    length = max(4, min(100, length))
-    chars = string.ascii_letters + string.digits + "!@#$%^&*()"
-    pwd = "".join(random.choice(chars) for _ in range(length))
-    await edit_msg(m, f"🔐 **Parol ({length}):**\n`{pwd}`")
-
-
-@app.on_message(filters.me & cmd("reverse"))
-async def reverse_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else None
-    if not text and m.reply_to_message:
-        text = m.reply_to_message.text or m.reply_to_message.caption
-    if not text:
-        return await edit_msg(m, "Matn yoki reply kerak.")
-    await edit_msg(m, f"🔄 **Teskari:**\n{str(text)[::-1]}")
-
-
-@app.on_message(filters.me & cmd("bio"))
-async def bio_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.bio matn`")
-    bio = m.text.split(maxsplit=1)[1]
-    try:
-        await client.update_profile(bio=bio)
-        await edit_msg(m, f"✅ Bio: `{bio}`")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("cinfo"))
-async def cinfo_cmd(client, m):
-    chat = m.chat
-    if chat.type == ChatType.PRIVATE:
-        return await edit_msg(m, "Guruh/kanalda ishlaydi.")
-    desc = (chat.description or "Yoq")[:100]
-    uname = f"@{chat.username}" if chat.username else "Yoq"
-    info = (
-        f"ℹ️ **{chat.title}**\n🔗 {uname}\n🆔 `{chat.id}`\n"
-        f"👥 {chat.members_count or '?'} azo\n📝 {desc}"
-    )
-    await client.send_message("me", info)
-    await edit_msg(m, "✅ Yuborildi!")
-
-
-@app.on_message(filters.me & cmd("calc"))
-async def calc_cmd(_c, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.calc 5*10`")
-    exp = m.text.split(maxsplit=1)[1]
-    try:
-        result = eval(exp, {"__builtins__": None}, {})
-        await edit_msg(m, f"🔢 `{exp}` = `{result}`")
-    except Exception:
-        await edit_msg(m, "❌ Noto'g'ri ifoda!")
-
-
-@app.on_message(filters.me & cmd("id"))
-async def id_cmd(_c, m):
-    text = f"📌 Chat: `{m.chat.id}`\n👤 Siz: `{m.from_user.id}`"
-    if m.reply_to_message and m.reply_to_message.from_user:
-        text += f"\n🎯 User: `{m.reply_to_message.from_user.id}`\n💬 Msg: `{m.reply_to_message.id}`"
-    await edit_msg(m, text)
-
-
-@app.on_message(filters.me & cmd("antiflood"))
-async def antiflood_cmd(_c, m):
-    global anti_flood_active
-    if len(m.command) > 1 and m.command[1] == "on":
-        anti_flood_active = True
-        await edit_msg(m, "🛡 Anti-Flood yoqildi!")
-    elif len(m.command) > 1 and m.command[1] == "off":
-        anti_flood_active = False
-        await edit_msg(m, "❌ Anti-Flood o'chirildi.")
-    else:
-        st = "Yoniq ✅" if anti_flood_active else "O'chiq ❌"
-        await edit_msg(m, f"Holat: **{st}**\n`.antiflood on/off`")
-
-
-@app.on_message(filters.me & cmd("anti-raid"))
-async def antiraid_cmd(_c, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhda!")
-    chat_id = m.chat.id
-    if len(m.command) > 1 and m.command[1] == "on":
-        anti_raid_chats[chat_id] = True
-        await edit_msg(m, "🛡 Anti-Raid yoqildi!")
-    elif len(m.command) > 1 and m.command[1] == "off":
-        anti_raid_chats.pop(chat_id, None)
-        await edit_msg(m, "✅ Anti-Raid o'chirildi.")
-    else:
-        await edit_msg(m, "`.anti-raid on/off`")
-
-
-@app.on_message(filters.me & cmd("raidlist"))
-async def raidlist_cmd(client, m):
-    chat_id = m.chat.id
-    if chat_id not in raid_spammers or not raid_spammers[chat_id]:
-        return await edit_msg(m, "📋 Ro'yxat bo'sh.")
-    text = f"📋 **Spammerlar** ({len(raid_spammers[chat_id])})\n\n"
-    for i, (uid, uname, fname, ts) in enumerate(raid_spammers[chat_id], 1):
-        text += f"{i}. **{fname}** `{uid}` {uname} — {ts}\n"
-    if len(text) > 4000:
-        await client.send_message("me", text)
-        await edit_msg(m, "✅ Uzun ro'yxat yuborildi.")
-    else:
-        await edit_msg(m, text)
-
-
-@app.on_message(filters.me & cmd("reportraid"))
-async def reportraid_cmd(client, m):
-    chat_id = m.chat.id
-    if chat_id not in raid_spammers or not raid_spammers[chat_id]:
-        return await edit_msg(m, "Ro'yxat bo'sh.")
-    try:
-        chat = await client.get_chat(chat_id)
-        title = chat.title or "Guruh"
-    except Exception:
-        title = "Guruh"
-    report = f"🚨 **RAID SHIKOYAT** — {title}\n📊 {len(raid_spammers[chat_id])} spammer\n\n"
-    for i, (uid, uname, fname, ts) in enumerate(raid_spammers[chat_id], 1):
-        report += f"{i}. {fname} `{uid}` {uname} — {ts}\n"
-    await client.send_message("me", report)
-    await edit_msg(m, "✅ @spam ga forward qiling.")
-
-
-@app.on_message(filters.me & cmd("deleted"))
-async def deleted_cmd(_c, m):
-    chat_id = m.chat.id
-    if chat_id not in message_cache or not message_cache[chat_id]:
-        return await edit_msg(m, "❌ Kesh bo'sh.")
-    target_id = m.reply_to_message.id if m.reply_to_message else None
-    if not target_id or target_id not in message_cache[chat_id]:
-        return await edit_msg(m, "❌ Keshda topilmadi. Reply bilan urinib ko'ring.")
-    text, uid, uname, fname, ts = message_cache[chat_id][target_id]
-    await edit_msg(
-        m,
-        f"🗑 **O'CHIRILGAN XABAR**\n👤 {fname} ({uname})\n🆔 `{uid}`\n⏰ {ts}\n\n💬 {text}",
-    )
-
-
-@app.on_message(filters.me & cmd("scam"))
-async def scam_cmd(_c, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.scam premium` / `.scam delete`")
-    kind = m.command[1].lower()
-    if kind == "premium":
-        target = m.reply_to_message.from_user if m.reply_to_message else m.from_user
-        name = target.first_name if target else "User"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Faollashtirish", url="https://t.me/spambot")]])
-        await edit_msg(
-            m,
-            f"🎁 **Premium Sovg'a!**\n👤 {name} sizga 1 yillik Premium sovg'a qildi!\n🎉 Oling!",
-            reply_markup=kb,
-        )
-    elif kind == "delete":
-        await edit_msg(m, "⚠️ Bu guruh 5 daqiqada o'chiriladi...\nSabab: Spam")
-    else:
-        await edit_msg(m, "`.scam premium` / `.scam delete`")
-
-
-@app.on_message(filters.me & cmd("cleaner"))
-async def cleaner_cmd(client, m):
-    global cleaner_pending
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhda!")
-    await m.edit_text("🧹 Skanerlanmoqda...")
-    deleted_accs, inactive_accs, total = [], [], 0
-    try:
-        async for member in client.get_chat_members(m.chat.id, limit=5000):
-            total += 1
-            if total % 50 == 0:
-                try:
-                    await m.edit_text(f"🧹 {total} tekshirildi...")
-                except Exception:
-                    pass
-            if member.user.is_deleted:
-                deleted_accs.append({"id": member.user.id})
-            elif hasattr(member.user, "status"):
-                sc = member.user.status.__class__.__name__
-                if sc in ("UserStatusOffline", "UserStatusLastMonth", "UserStatusLastWeek"):
-                    inactive_accs.append({"id": member.user.id, "name": member.user.first_name or "?"})
-            if total % 20 == 0:
-                await asyncio.sleep(0.5)
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 5)
-    if not deleted_accs and not inactive_accs:
-        return await edit_msg(m, f"✅ {total} tekshirildi — muammo yo'q.")
-    cleaner_pending[m.chat.id] = {"message_id": m.id, "deleted": deleted_accs, "inactive": inactive_accs}
-    await edit_msg(
-        m,
-        f"🧹 **Natija** ({total} tekshirildi)\n🗑 O'lik: {len(deleted_accs)}\n"
-        f"💀 Faol emas: {len(inactive_accs)}\n\nReply qilib **y** yozing.",
-    )
-
-
-@app.on_message(filters.me & cmd("purge"))
-async def purge_cmd(client, m):
-    if not m.reply_to_message:
-        return await edit_msg(m, "Boshlang'ich xabarga reply qiling!")
-    ids = list(range(m.reply_to_message.id, m.id + 1))
-    try:
-        for i in range(0, len(ids), 100):
-            await client.delete_messages(m.chat.id, ids[i : i + 100])
-            await asyncio.sleep(0.5)
-        info = await client.send_message(m.chat.id, f"🗑 {len(ids)} ta o'chirildi!")
-        await asyncio.sleep(2)
-        await info.delete()
-    except Exception as e:
-        await client.send_message("me", f"Purge xato: {e}")
-
-
-@app.on_message(filters.me & cmd("promote"))
-async def promote_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    try:
-        await client.promote_chat_member(
-            m.chat.id, m.reply_to_message.from_user.id,
-            privileges=types.ChatAdminRights(
-                delete_messages=True, ban_users=True, invite_users=True,
-                pin_messages=True, manage_call=True,
-            ),
-        )
-        await edit_msg(m, f"👑 **{m.reply_to_message.from_user.first_name}** admin!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("demote"))
-async def demote_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    try:
-        await client.promote_chat_member(
-            m.chat.id, m.reply_to_message.from_user.id, privileges=types.ChatAdminRights(),
-        )
-        await edit_msg(m, "📉 Adminlik olindi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("kick"))
-async def kick_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    uid = m.reply_to_message.from_user.id
-    try:
-        await client.ban_chat_member(m.chat.id, uid)
-        await client.unban_chat_member(m.chat.id, uid)
-        await edit_msg(m, "👢 Chiqarildi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("pin"))
-async def pin_cmd(client, m):
-    if not m.reply_to_message:
-        return await edit_msg(m, "Pin qilinadigan xabarga reply!")
-    try:
-        await client.pin_chat_message(m.chat.id, m.reply_to_message.id)
-        await edit_msg(m, "📌 Pin qilindi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("loudpin"))
-async def loudpin_cmd(client, m):
-    if not m.reply_to_message:
-        return await edit_msg(m, "Pin qilinadigan xabarga reply qiling!")
-    try:
-        await client.pin_chat_message(m.chat.id, m.reply_to_message.id, disable_notification=False)
-        await edit_msg(m, "📌 Barchaga bildirishnoma bilan pin qilindi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("unpin"))
-async def unpin_cmd(client, m):
-    try:
-        if m.reply_to_message:
-            await client.unpin_chat_message(m.chat.id, m.reply_to_message.id)
-        else:
-            await client.unpin_all_chat_messages(m.chat.id)
-        await edit_msg(m, "📌 Unpin qilindi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("hack"))
-async def hack_cmd(_c, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    uid = m.reply_to_message.from_user.id
-    name = m.reply_to_message.from_user.first_name or "User"
-    if uid in hacked_users:
-        return await edit_msg(m, "⚠️ Allaqachon hack! `.unhack`")
-    for frame in get_hack_frames(name):
-        await edit_msg(m, frame)
-        await asyncio.sleep(1.2)
-    hacked_users.add(uid)
-
-
-@app.on_message(filters.me & cmd("unhack"))
-async def unhack_cmd(_c, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    uid = m.reply_to_message.from_user.id
-    name = m.reply_to_message.from_user.first_name or "User"
-    if uid not in hacked_users:
-        return await edit_msg(m, "Hack qilinmagan.")
-    for frame in get_unhack_frames(name):
-        await edit_msg(m, frame)
-        await asyncio.sleep(1.2)
-    hacked_users.discard(uid)
-
-
-# ═══════════════════════ SCRAPE / O'YINLAR / UTILITA ═══════════════════════
-@app.on_message(filters.me & cmd("scrape"))
-async def scrape_cmd(client, m):
-    limit = int(m.command[1]) if len(m.command) > 1 and m.command[1].isdigit() else 1000
-    await m.edit_text(f"⏳ {limit} xabar skanerlanmoqda...")
-    users = []
-    seen = set()
-    async for msg in client.get_chat_history(m.chat.id, limit=limit):
-        if msg.from_user and msg.from_user.username and msg.from_user.id not in seen:
-            seen.add(msg.from_user.id)
-            users.append(f"@{msg.from_user.username}\n")
-    if not users:
-        return await edit_msg(m, "Username topilmadi.")
-    fn = os.path.join(BASE_DIR, "scraped_users.txt")
-    with open(fn, "w", encoding="utf-8") as f:
-        f.writelines(users)
-    await client.send_document(m.chat.id, fn, caption=f"✅ {len(users)} ta user")
-    os.remove(fn)
-
-
-@app.on_message(filters.me & cmd("sendall"))
-async def sendall_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.document or len(m.command) < 2:
-        return await edit_msg(m, "`.txt` faylga reply + `.sendall matn`")
-    text = m.text.split(maxsplit=1)[1]
-    path = await client.download_media(m.reply_to_message)
-    with open(path, "r", encoding="utf-8") as f:
-        users = [l.strip() for l in f if l.strip()]
-    os.remove(path)
-    ok = 0
-    for u in users:
-        try:
-            await client.send_message(u, text)
-            ok += 1
-            await asyncio.sleep(3)
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 5)
-        except Exception:
-            continue
-    await edit_msg(m, f"✅ {ok}/{len(users)} ga yuborildi.")
-
-
-@app.on_message(filters.me & cmd("search"))
-async def search_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.search kalit`")
-    kw = m.text.split(maxsplit=1)[1]
-    await m.edit_text(f"🔍 '{kw}' qidirilmoqda...")
-    try:
-        res = await client.invoke(Search(q=kw, limit=20))
-        lines = []
-        for chat in res.chats:
-            if hasattr(chat, "username") and chat.username:
-                title = getattr(chat, "title", "Nomsiz")
-                lines.append(f"▪️ {title} — @{chat.username}")
-        text = f"**🔍 '{kw}':**\n\n" + ("\n".join(lines) if lines else "Topilmadi.")
-        await edit_msg(m, text)
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("quiz"))
-async def quiz_cmd(_c, m):
-    q = random.choice(quiz_data)
-    active_quiz[m.chat.id] = q
-    await edit_msg(m, f"❓ **Viktorina!**\n\n{q['q']}\n\n_Javob yozing..._")
-
-
-@app.on_message(filters.me & cmd("duel"))
-async def duel_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhda!")
-    timer = 1
-    users = []
-    for arg in m.command[1:]:
-        if arg.startswith("@"):
-            users.append(arg)
-        elif arg.isdigit():
-            timer = int(arg)
-    if len(users) >= 2:
-        u1, u2 = users[0], users[1]
-    elif m.reply_to_message and m.reply_to_message.from_user:
-        u1, u2 = m.from_user.first_name, m.reply_to_message.from_user.first_name
-    else:
-        return await edit_msg(m, "Reply yoki 2 ta @user!")
-    await m.delete()
-    poll = await client.send_poll(
-        m.chat.id,
-        f"⚔️ DUEL: {u1} 🆚 {u2} ({timer} daq)",
-        [f"🗡 {u1}", f"🛡 {u2}", "🤝 Durang"],
-        is_anonymous=False,
-    )
-
-    async def announce():
-        await asyncio.sleep(timer * 60)
-        try:
-            msg = await client.get_messages(m.chat.id, poll.id)
-            if not msg.poll:
-                return
-            best = max(msg.poll.options, key=lambda o: o.voter_count)
-            await client.send_message(m.chat.id, f"🏆 G'olib: **{best.text}** ({best.voter_count} ovoz)")
-            await client.stop_poll(m.chat.id, poll.id)
-        except Exception:
-            pass
-
-    asyncio.create_task(announce())
-
-
-@app.on_message(filters.me & cmd("slot"))
-async def slot_cmd(_c, m):
-    sym = ["🍒", "🍋", "🔔", "💎", "7️⃣", "🍉", "⭐"]
-    await m.edit_text("🎰 Aylanmoqda...")
-    for _ in range(3):
-        s = random.choices(sym, k=3)
-        try:
-            await m.edit_text(f"🎰 | {s[0]} | {s[1]} | {s[2]} |")
-            await asyncio.sleep(0.4)
-        except Exception:
-            pass
-    s = random.choices(sym, k=3)
-    if s[0] == s[1] == s[2]:
-        res = f"🎰 | {s[0]} | {s[1]} | {s[2]} |\n\n🎉 **YUTUQ!**"
-    elif s[0] == s[1] or s[1] == s[2] or s[0] == s[2]:
-        res = f"🎰 | {s[0]} | {s[1]} | {s[2]} |\n\n😏 Deyarli!"
-    else:
-        res = f"🎰 | {s[0]} | {s[1]} | {s[2]} |\n\n😔 Omad yo'q."
-    await edit_msg(m, res)
-
-
-@app.on_message(filters.me & cmd("guess"))
-async def guess_cmd(_c, m):
-    msg = await m.edit_text("🔢 1-100 son o'yladim! Reply bilan toping.")
-    active_guess[m.chat.id] = {"number": random.randint(1, 100), "attempts": 0, "msg_id": msg.id}
-
-
-@app.on_message(filters.me & cmd("game"))
-async def game_cmd(_c, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    u1, u2 = m.from_user, m.reply_to_message.from_user
-    if u1.id == u2.id:
-        return await edit_msg(m, "O'zingiz bilan emas!")
-    msg = await m.edit_text(
-        f"🎮 **Tosh-Qaychi-Qog'oz**\n{u1.first_name} 🆚 {u2.first_name}\n\n"
-        f"Reply: `tosh`, `qaychi`, `qog'oz`"
-    )
-    active_rps[m.chat.id] = {
-        "msg_id": msg.id, "u1_id": u1.id, "u1_name": u1.first_name,
-        "u2_id": u2.id, "u2_name": u2.first_name,
-        "u1_choice": None, "u2_choice": None,
-    }
-
-
-@app.on_message(filters.me & cmd("mind"))
-async def mind_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    user = m.reply_to_message.from_user
-    count = min(int(m.command[1]), 20) if len(m.command) > 1 and m.command[1].isdigit() else 5
-    mention = f"[{user.first_name}](tg://user?id={user.id})"
-    await m.edit_text(f"🔔 **{user.first_name}** chaqirilmoqda...")
-    for _ in range(count):
-        try:
-            msg = await client.send_message(m.chat.id, f"🔔 {mention}, muhim!", disable_web_page_preview=True)
-            await asyncio.sleep(1)
-            await msg.delete()
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            await client.send_message("me", f"mind xato: {e}")
-            break
-    await client.send_message(m.chat.id, f"✅ {count} marta chaqirildi.")
-
-
-@app.on_message(filters.me & cmd("qr"))
-async def qr_cmd(client, m):
-    data = None
-    if len(m.command) > 1:
-        data = m.text.split(maxsplit=1)[1]
-    elif m.reply_to_message:
-        data = m.reply_to_message.link or f"https://t.me/c/{str(m.chat.id).replace('-100', '')}/{m.reply_to_message.id}"
-    if not data:
-        return await edit_msg(m, "`.qr havola` yoki reply")
-    await m.edit_text("📱 QR yaratilmoqda...")
-    try:
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(data)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        buf.name = "qr.png"
-        await client.send_photo(m.chat.id, buf, caption=f"📱 `{data[:50]}`")
-        await m.delete()
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("shorten"))
-async def shorten_cmd(_c, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.shorten url`")
-    url = m.command[1]
-    s = pyshorteners.Shortener()
-    try:
-        short = s.tinyurl.short(url)
-    except Exception:
-        try:
-            short = s.isgd.short(url)
-        except Exception as e:
-            return await edit_msg(m, f"❌ {e}")
-    await edit_msg(m, f"🔗 `{short}`")
-
-
-@app.on_message(filters.me & cmd("remind"))
-async def remind_cmd(client, m):
-    if len(m.command) < 3:
-        return await edit_msg(m, "`.remind 10m matn` (s/m/h)`")
-    try:
-        delay = parse_delay(m.command[1])
-        text = m.text.split(maxsplit=2)[2]
-    except Exception:
-        return await edit_msg(m, "Vaqt: `10s`, `5m`, `2h`")
-    chat_id = m.chat.id
-
-    async def task():
-        await asyncio.sleep(delay)
-        try:
-            await client.send_message(chat_id, f"⏰ **Eslatma!**\n\n{text}")
-        except Exception:
-            pass
-
-    asyncio.create_task(task())
-    disp = f"{delay}s" if delay < 60 else f"{delay // 60}m" if delay < 3600 else f"{delay // 3600}h"
-    await edit_msg(m, f"✅ {disp} dan keyin eslataman:\n_{text}_")
-
-
-@app.on_message(filters.me & cmd("note"))
-async def note_cmd(_c, m):
-    if len(m.command) == 1:
-        if not my_notes:
-            return await edit_msg(m, "Qayd yo'q. `.note nom matn`")
-        text = "📝 **Qaydlar:**\n" + "\n".join(f"• **{k}**" for k in my_notes)
-        return await edit_msg(m, text)
-    if len(m.command) == 2:
-        val = my_notes.get(m.command[1].lower())
-        return await edit_msg(m, val or "❌ Topilmadi.")
-    name = m.command[1].lower()
-    content = m.text.split(maxsplit=2)[2]
-    my_notes[name] = content
-    save_json(NOTES_FILE, my_notes)
-    await edit_msg(m, f"✅ **{name}** saqlandi!")
-
-
-@app.on_message(filters.me & cmd("currency"))
-async def currency_cmd(_c, m):
-    if len(m.command) < 4:
-        return await edit_msg(m, "`.currency 100 USD UZS`")
-    try:
-        amt = float(m.command[1])
-        c1, c2 = m.command[2].upper(), m.command[3].upper()
-        rates = requests.get(f"https://api.exchangerate-api.com/v4/latest/{c1}", timeout=10).json()
-        result = amt * rates["rates"][c2]
-        await edit_msg(m, f"💱 {amt} {c1} = **{result:.2f}** {c2}")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-# ═══════════════════════ VIZUAL EFFEKTLAR ═══════════════════════
-MATRIX_CHARS = 'ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ012345789Z:."=*+-<>¦|_'
-
-
-@app.on_message(filters.me & cmd("matrix"))
-async def matrix_cmd(_c, m):
-    try:
-        for _ in range(8):
-            lines = ["".join(random.choices(MATRIX_CHARS, k=20)) for _ in range(6)]
-            await m.edit_text("🟢 **MATRIX**\n\n" + "\n".join(f"`{l}`" for l in lines))
-            await asyncio.sleep(0.5)
-        await edit_msg(m, "🟢 **MATRIX** — _Wake up, Neo..._")
-    except Exception as e:
-        await edit_msg(m, f"Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("fire"))
-async def fire_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "FIRE"
-    frames = [
-        f"🔥🔥🔥\n🔥 {text} 🔥\n🔥🔥🔥",
-        f"💥💥💥\n💥 {text} 💥\n💥💥💥",
-        f"🌋🌋🌋\n🌋 {text} 🌋\n🌋🌋🌋",
-        f"🔥 **{text}** 🔥",
-    ]
-    for f in frames:
-        try:
-            await m.edit_text(f)
-            await asyncio.sleep(0.6)
-        except Exception:
-            pass
-
-
-@app.on_message(filters.me & cmd("glitch"))
-async def glitch_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "GLITCH"
-    try:
-        for intensity in range(1, 6):
-            glitched = "".join(c + "".join(random.choice(zalgo_chars) for _ in range(intensity)) for c in text)
-            await m.edit_text(glitched)
-            await asyncio.sleep(0.5)
-        final = "".join(c + "".join(random.choice(zalgo_chars) for _ in range(8)) for c in text)
-        await edit_msg(m, f"**{final}**")
-    except Exception:
-        pass
-
-
-@app.on_message(filters.me & cmd("happy"))
-async def happy_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Tabriklaymiz"
-    padded = " " * 15 + text + " " * 15
-    try:
-        for i in range(len(padded) - 15):
-            window = padded[i : i + 15]
-            try:
-                await m.edit_text(f"{random.choice(confetti)} `{window}` {random.choice(confetti)}")
-            except (FloodWait, MessageNotModified):
-                pass
-            await asyncio.sleep(0.3)
-        await edit_msg(m, f"🎉🎊 **{text}!!!** 🎊🎉")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("heart"))
-async def heart_cmd(_c, m):
-    try:
-        for _ in range(15):
-            try:
-                await m.edit_text(random.choice(hearts))
-            except (FloodWait, MessageNotModified):
-                pass
-            await asyncio.sleep(0.3)
-        await edit_msg(m, "❤️")
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd("moon"))
-async def moon_cmd(_c, m):
-    try:
-        for _ in range(3):
-            for moon in moons:
-                await m.edit_text(moon)
-                await asyncio.sleep(0.2)
-        await edit_msg(m, "🌝")
-    except Exception:
-        pass
-
-
-@app.on_message(filters.me & cmd("magic"))
-async def magic_cmd(_c, m):
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "MAGIC"
-    try:
-        for i in range(len(text)):
-            await m.edit_text(text[:i] + "✨" + text[i + 1 :])
-            await asyncio.sleep(0.3)
-        await edit_msg(m, f"✨ {text} ✨")
-    except Exception:
-        pass
-
-
-# ═══════════════════════ SUPER WOW ═══════════════════════
-@app.on_message(filters.me & cmd("burn"))
-async def burn_cmd(client, m):
-    if len(m.command) < 3 or not m.command[1].isdigit():
-        return await edit_msg(m, "`.burn 5 sirli xabar`")
-    sec = int(m.command[1])
-    text = m.text.split(maxsplit=2)[2]
-    try:
-        msg = await m.edit_text(f"🤫 **Maxfiy:**\n{text}\n⏳ {sec}s...")
-        for i in range(sec - 1, 0, -1):
-            await client.edit_message_text(m.chat.id, msg.id, f"🤫 {text}\n⏳ {i}s...")
-            await asyncio.sleep(1)
-        await client.edit_message_text(m.chat.id, msg.id, "💥 Portladi!")
-        await asyncio.sleep(0.5)
-        await msg.delete()
-    except Exception:
-        pass
-
-
-@app.on_message(filters.me & cmd("dox"))
-async def dox_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    u = m.reply_to_message.from_user
-    msg = await m.edit_text(f"🔍 **{u.first_name}** skanerlanmoqda...")
-    await asyncio.sleep(1.5)
-    ip = f"{random.randint(11,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
-    device = random.choice(["iPhone 15", "Samsung S24", "MacBook Pro", "Windows 11"])
-    text = (
-        f"🎯 **TARGET: {u.first_name}**\n\n🌐 IP: `{ip}`\n📱 Device: `{device}`\n"
-        f"📍 GPS: `{random.uniform(41,42):.4f}, {random.uniform(69,70):.4f}`\n\n"
-        f"⚠️ _Fake intel — ko'ngilochar_"
-    )
-    await client.edit_message_text(m.chat.id, msg.id, text)
-
-
-@app.on_message(filters.me & cmd("typing"))
-async def typing_cmd(client, m):
-    cid = m.chat.id
-    if is_typing.get(cid):
-        is_typing[cid] = False
-        await edit_msg(m, "🛑 Typing to'xtatildi!")
-        return
-    is_typing[cid] = True
-    await edit_msg(m, "⏳ Typing yoqildi. Yana `.typing` bilan o'chiring.")
-
-    async def loop():
-        while is_typing.get(cid):
-            try:
-                await client.send_chat_action(cid, ChatAction.TYPING)
-                await asyncio.sleep(4)
-            except Exception:
-                break
-
-    asyncio.create_task(loop())
-
-
-@app.on_message(filters.me & cmd("autotr"))
-async def autotr_cmd(_c, m):
-    if len(m.command) > 1:
-        if m.command[1].lower() == "off":
-            autotr_data["active"] = False
-            await edit_msg(m, "✅ AutoTR o'chirildi.")
-        else:
-            autotr_data["active"] = True
-            autotr_data["lang"] = m.command[1]
-            await edit_msg(m, f"✅ AutoTR: {m.command[1]}")
-    else:
-        await edit_msg(m, "`.autotr en` / `.autotr off`")
-
-
-@app.on_message(filters.me & cmd("ghost"))
-async def ghost_cmd(_c, m):
-    if len(m.command) > 1 and m.command[1] == "clear":
-        ghost_users.clear()
-        return await edit_msg(m, "✅ Ghost tozalandi.")
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    uid = m.reply_to_message.from_user.id
-    if uid in ghost_users:
-        ghost_users.remove(uid)
-        await edit_msg(m, "👻 Ghost o'chirildi.")
-    else:
-        ghost_users.add(uid)
-        await edit_msg(m, "👻 Ghost yoqildi (o'qish bildirmasdan).")
-
-
-@app.on_message(filters.me & cmd("double"))
-async def double_cmd(_c, m):
-    if len(m.command) > 1 and m.command[1] == "clear":
-        double_users.clear()
-        double_msg_map.clear()
-        return await edit_msg(m, "✅ Double tozalandi.")
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    uid = m.reply_to_message.from_user.id
-    if uid in double_users:
-        double_users.remove(uid)
-        await edit_msg(m, "Double o'chirildi.")
-    else:
-        double_users.add(uid)
-        await edit_msg(m, "Double yoqildi.")
-
-
-import base64
-
-@app.on_message(filters.me & cmd("ip"))
-async def ip_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.ip 8.8.8.8`")
-    ip_addr = m.command[1]
-    await m.edit_text("🔍 Tekshirilmoqda...")
-    try:
-        req = requests.get(f"http://ip-api.com/json/{ip_addr}", timeout=5).json()
-        if req.get("status") == "fail":
-            return await edit_msg(m, "❌ Noto'g'ri IP yoki topilmadi.")
-        text = (
-            f"🌐 **IP Ma'lumoti:** `{ip_addr}`\n\n"
-            f"🏳️ **Davlat:** {req.get('country')} ({req.get('countryCode')})\n"
-            f"🏙 **Shahar:** {req.get('city')}\n"
-            f"🏢 **ISP:** {req.get('isp')}\n"
-            f"📍 **Kordinata:** `{req.get('lat')}, {req.get('lon')}`"
-        )
-        await edit_msg(m, text)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("b64e"))
-async def b64e_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.b64e matn`")
-    text = m.text.split(maxsplit=1)[1]
-    encoded = base64.b64encode(text.encode("utf-8")).decode("utf-8")
-    await edit_msg(m, f"🔐 **Base64 Encode:**\n`{encoded}`")
-
-
-@app.on_message(filters.me & cmd("b64d"))
-async def b64d_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.b64d matn`")
-    text = m.text.split(maxsplit=1)[1]
-    try:
-        decoded = base64.b64decode(text).decode("utf-8")
-        await edit_msg(m, f"🔓 **Base64 Decode:**\n`{decoded}`")
-    except Exception:
-        await edit_msg(m, "❌ Noto'g'ri Base64 matn!")
-
-
-@app.on_message(filters.me & cmd("adminlist"))
-async def adminlist_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    await m.edit_text("👮 Adminlar qidirilmoqda...")
-    admins = []
-    try:
-        async for admin in client.get_chat_members(m.chat.id, filter=pyrogram_utils.enums.ChatMembersFilter.ADMINISTRATORS):
-            if not admin.user.is_deleted:
-                admins.append(f"• [{admin.user.first_name}](tg://user?id={admin.user.id})")
-        if not admins:
-            return await edit_msg(m, "Adminlar topilmadi.")
-        await edit_msg(m, f"👮 **Guruh Adminlari:**\n\n" + "\n".join(admins))
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("botlist"))
-async def botlist_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    await m.edit_text("🤖 Botlar qidirilmoqda...")
-    bots = []
-    try:
-        async for bot in client.get_chat_members(m.chat.id, filter=pyrogram_utils.enums.ChatMembersFilter.BOTS):
-            bots.append(f"• [{bot.user.first_name}](tg://user?id={bot.user.id}) (@{bot.user.username})")
-        if not bots:
-            return await edit_msg(m, "Botlar yo'q.")
-        await edit_msg(m, f"🤖 **Guruh Botlari:**\n\n" + "\n".join(bots))
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("join"))
-async def join_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.join username_yoki_link`")
-    link = m.command[1]
-    try:
-        await client.join_chat(link)
-        await edit_msg(m, f"✅ `{link}` guruhiga qo'shildingiz!")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("leave"))
-async def leave_cmd(client, m):
-    try:
-        await edit_msg(m, "👋 Xayr!")
-        await client.leave_chat(m.chat.id)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd(["dice", "darts", "basket", "football"]))
-async def dice_cmd(client, m):
-    emoji = "🎲"
-    if m.command[0] == "darts":
-        emoji = "🎯"
-    elif m.command[0] == "basket":
-        emoji = "🏀"
-    elif m.command[0] == "football":
-        emoji = "⚽"
-    await m.delete()
-    await client.send_dice(m.chat.id, emoji=emoji)
-
-# ═══════════════════════ YANGI FUNKSIYALAR ═══════════════════════
+import json
+import asyncio
+import threading
 import sys
-import traceback
-from faker import Faker
-import yt_dlp
+import shutil
+import requests
 
-fake_gen = Faker()
-antidelete_active = False
+# Windows compatibility fix for asyncio and Pyrogram
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-@app.on_message(filters.me & cmd("antidelete"))
-async def antidelete_cmd(_c, m):
-    global antidelete_active
-    if len(m.command) > 1 and m.command[1].lower() == "on":
-        antidelete_active = True
-        await edit_msg(m, "🛡 Anti-Delete yoqildi! O'chirilgan xabarlar Saqlangan xabarlarga (Saved Messages) tushadi.")
-    elif len(m.command) > 1 and m.command[1].lower() == "off":
-        antidelete_active = False
-        await edit_msg(m, "❌ Anti-Delete o'chirildi.")
-    else:
-        st = "Yoniq ✅" if antidelete_active else "O'chiq ❌"
-        await edit_msg(m, f"Holat: **{st}**\n`.antidelete on/off`")
+from pyrogram import Client, filters, idle
+from pyrogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    LabeledPrice,
+    PreCheckoutQuery,
+    Message,
+)
+from pyrogram.errors import (
+    FloodWait,
+    PeerIdInvalid,
+    UserPrivacyRestricted,
+    UsernameNotOccupied,
+    UserNotParticipant,
+    InviteHashExpired,
+    ChannelPrivate,
+    UserAlreadyParticipant,
+    UserDeactivated,
+)
+from pyrogram import idle
+from pyrogram.raw import functions
 
-@app.on_deleted_messages()
-async def antidelete_handler(client, messages):
-    if not antidelete_active:
-        return
-    for msg in messages:
-        # Check cache from deleted_cmd logic
-        chat_id = msg.chat.id if hasattr(msg, 'chat') and msg.chat else None
-        if chat_id and chat_id in message_cache and msg.id in message_cache[chat_id]:
-            text, uid, uname, fname, ts = message_cache[chat_id][msg.id]
-            try:
-                await client.send_message(
-                    "me",
-                    f"🗑 **O'CHIRILGAN XABAR**\n👤 {fname} ({uname})\n🆔 `{uid}`\n⏰ {ts}\nChat: `{chat_id}`\n\n💬 {text}"
-                )
-            except Exception:
-                pass
+# ================= KONSOL VA TOKEN SOZLAMALARI =================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 
-@app.on_message(filters.me & cmd("steal"))
-async def steal_cmd(client, m):
-    if not m.reply_to_message or not (m.reply_to_message.photo or m.reply_to_message.video):
-        return await edit_msg(m, "Rasm yoki videoga reply qiling!")
-    await m.edit_text("⏳ Yuklanmoqda...")
-    try:
-        file_path = await client.download_media(m.reply_to_message)
-        if m.reply_to_message.photo:
-            await client.send_photo("me", file_path, caption="📸 O'g'irlangan rasm (View Once)")
-        elif m.reply_to_message.video:
-            await client.send_video("me", file_path, caption="🎥 O'g'irlangan video (View Once)")
-        os.remove(file_path)
-        await edit_msg(m, "✅ Saved Messages ga saqlandi!")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
+def load_config():
+    # Environment variables (Railway.app uchun)
+    api_id = os.getenv("API_ID")
+    api_hash = os.getenv("API_HASH")
+    bot_token = os.getenv("BOT_TOKEN")
 
+    if api_id and api_hash and bot_token:
+        return {"API_ID": int(api_id), "API_HASH": api_hash, "BOT_TOKEN": bot_token}
 
-@app.on_message(filters.me & cmd("fake"))
-async def fake_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Reply qiling!")
-    text = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Salom"
-    target = m.reply_to_message.from_user
-    
-    global original_profile
-    me = await client.get_me()
-    if not original_profile:
-        original_profile = {
-            "first_name": me.first_name or "",
-            "last_name": me.last_name or "",
-            "bio": (await client.get_chat(me.id)).bio or "",
+    # Local development uchun config.json
+    parent_config = os.path.join(os.path.dirname(BASE_DIR), "config.json")
+    if not os.path.exists(CONFIG_FILE) and os.path.exists(parent_config):
+        with open(parent_config, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+        return config
+    if not os.path.exists(CONFIG_FILE):
+        token = input("Bot Tokenni kiriting (@BotFather dan olingan): ")
+        config = {
+            "API_ID": 36427121,
+            "API_HASH": "f4b857c7d7e08dce9244615ef32d7cc7",
+            "BOT_TOKEN": token,
         }
-    
-    try:
-        await m.delete()
-        # Fake ismni o'rnatish
-        await client.update_profile(
-            first_name=target.first_name or "", last_name=target.last_name or ""
-        )
-        # Fake xabarni yuborish
-        await client.send_message(m.chat.id, text, reply_to_message_id=m.reply_to_message.id)
-        # O'z holiga qaytish
-        await client.update_profile(**original_profile)
-    except Exception as e:
-        await client.send_message("me", f"Fake xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("q"))
-async def q_cmd(client, m):
-    if not m.reply_to_message:
-        return await edit_msg(m, "Xabarga reply qiling!")
-    await m.edit_text("⏳ Iqtibos yasalmoqda...")
-    try:
-        # Simple fallback text quote formatting since we don't have Quotly bot integrated natively
-        msg = m.reply_to_message
-        name = msg.from_user.first_name if msg.from_user else "User"
-        text = msg.text or msg.caption or "Media"
-        
-        # Creating a beautiful quote message block
-        quote = f"💬 **{name}** yozgan:\n\n> _{text}_"
-        await m.edit_text(quote)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("yt"))
-async def yt_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.yt link`")
-    link = m.command[1]
-    await m.edit_text("⏳ YouTube'dan yuklanmoqda...")
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(BASE_DIR, 'downloads', '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'extractor_args': {'youtube': ['player_client=android']},
-        'ffmpeg_location': FFMPEG_PATH,
-        'quiet': True,
-        'noplaylist': True
-    }
-    os.makedirs(os.path.join(BASE_DIR, 'downloads'), exist_ok=True)
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=True)
-            filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
-            
-        await m.edit_text("🚀 Audio Telegramga yuklanmoqda...")
-        await client.send_audio(m.chat.id, filename, caption=f"🎧 **{info.get('title')}**\n\nYuklandi: Vento Userbot", title=info.get('title'))
-        await m.delete()
-        os.remove(filename)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("ytchat"))
-async def ytchat_cmd(client, m):
-    global group_call
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.ytchat qo'shiq nomi yoki linki`")
-    
-    query = m.text.split(maxsplit=1)[1]
-    await m.edit_text(f"🎵 Ovozli chatga qo'yilmoqda: {query}...")
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(BASE_DIR, 'downloads', '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'extractor_args': {'youtube': ['player_client=android']},
-        'ffmpeg_location': FFMPEG_PATH,
-        'quiet': True,
-        'noplaylist': True,
-        'default_search': 'ytsearch'
-    }
-    os.makedirs(os.path.join(BASE_DIR, 'downloads'), exist_ok=True)
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            if "http" in query:
-                info = ydl.extract_info(query, download=True)
-            else:
-                info = ydl.extract_info(f"ytsearch:{query}", download=True)['entries'][0]
-            filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
-        
-        if group_call is not None:
-            await group_call.stop()
-        group_call = GroupCallFactory(client, GroupCallFactory.MTPROTO_CLIENT_TYPE.PYROGRAM).get_file_group_call(filename)
-        await group_call.start(m.chat.id)
-        await edit_msg(m, f"🎙 **Voice Chatda o'ynamoqda:**\n🎧 {info.get('title')}\n\n🛑 To'xtatish uchun: `.ytchatstop`")
-    except FloodWait as e:
-        await edit_msg(m, f"⏳ Telegram cheklov qo'ydi. **{e.value} soniya** kutib, qayta urinib ko'ring.")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("ytchatstop"))
-async def ytchatstop_cmd(client, m):
-    global group_call
-    try:
-        if group_call is not None:
-            await group_call.stop()
-            group_call = None
-        await edit_msg(m, "🛑 Voice Chatdan chiqildi.")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("song"))
-async def song_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.song qo'shiq nomi`")
-    query = m.text.split(maxsplit=1)[1]
-    await m.edit_text(f"🎵 Qidirilmoqda: {query}...")
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(BASE_DIR, 'downloads', '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'extractor_args': {'youtube': ['player_client=android']},
-        'ffmpeg_location': FFMPEG_PATH,
-        'quiet': True,
-        'noplaylist': True,
-        'default_search': 'ytsearch'
-    }
-    os.makedirs(os.path.join(BASE_DIR, 'downloads'), exist_ok=True)
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{query}", download=True)['entries'][0]
-            filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
-            
-        await m.edit_text("🚀 Audio yuklanmoqda...")
-        await client.send_audio(m.chat.id, filename, caption=f"🎧 **{info.get('title')}**", title=info.get('title'))
-        await m.delete()
-        os.remove(filename)
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("fakecc"))
-async def fakecc_cmd(_c, m):
-    cc = fake_gen.credit_card_full()
-    await edit_msg(m, f"💳 **Fake Credit Card:**\n\n`{cc}`")
-
-
-@app.on_message(filters.me & cmd("eval"))
-async def eval_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "Kodni kiriting.")
-    code = m.text.split(maxsplit=1)[1]
-    await m.edit_text("💻 Ishga tushirilmoqda...")
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    sys.stdout = io.StringIO()
-    sys.stderr = io.StringIO()
-    try:
-        # Wrap async code to allow 'await' in eval if needed, otherwise standard exec
-        exec(
-            f"async def __aexec(client, m):\n"
-            + "".join(f"\n    {l}" for l in code.split("\n"))
-        )
-        await locals()["__aexec"](client, m)
-        stdout = sys.stdout.getvalue()
-        stderr = sys.stderr.getvalue()
-        result = stdout + stderr
-        if not result:
-            result = "Success (No output)"
-    except Exception:
-        result = traceback.format_exc()
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
-        
-    if len(result) > 4000:
-        with open("eval_output.txt", "w", encoding="utf-8") as f:
-            f.write(result)
-        await client.send_document(m.chat.id, "eval_output.txt", caption="Natija (uzun)")
-        os.remove("eval_output.txt")
-        await m.delete()
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=4)
+        return config
     else:
-        await edit_msg(m, f"💻 **Eval Code:**\n`{code}`\n\n📤 **Natija:**\n`{result}`")
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
 
 
-@app.on_message(filters.me & cmd("term"))
-async def term_cmd(client, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "Buyruq kiriting.")
-    cmd_text = m.text.split(maxsplit=1)[1]
-    await m.edit_text("🖥 Ishga tushirilmoqda...")
-    try:
-        process = await asyncio.create_subprocess_shell(
-            cmd_text,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        res = stdout.decode() + stderr.decode()
-        if not res:
-            res = "Bajarildi (javob yo'q)"
-        
-        if len(res) > 4000:
-            with open("term_output.txt", "w", encoding="utf-8") as f:
-                f.write(res)
-            await client.send_document(m.chat.id, "term_output.txt", caption="Terminal natijasi")
-            os.remove("term_output.txt")
-            await m.delete()
-        else:
-            await edit_msg(m, f"🖥 **Terminal:**\n`{cmd_text}`\n\n📤 **Natija:**\n`{res}`")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
+config = load_config()
 
-# ═══════════════════════ SUPER BOMB FEATURES ═══════════════════════
-spy_targets = {}   # {user_id: {"status": "online/offline", "task": task}}
-
-@app.on_message(filters.me & cmd("spy"))
-async def spy_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.from_user:
-        return await edit_msg(m, "Kuzatiladigan odamning xabariga reply qiling!")
-    target = m.reply_to_message.from_user
-    uid = target.id
-    name = target.first_name or "User"
-
-    if uid in spy_targets:
-        spy_targets[uid]["active"] = False
-        del spy_targets[uid]
-        return await edit_msg(m, f"🛑 **{name}** kuzatuvi to'xtatildi.")
-
-    await edit_msg(m, f"🕵️ **{name}** kuzatilmoqda...\nXar safar online/offline bo'lganda xabar olasiz.\nTekshirish uchun yana `.spy` yozing.")
-
-    spy_targets[uid] = {"active": True, "last_status": None, "name": name}
-
-    async def _spy_loop():
-        while spy_targets.get(uid, {}).get("active", False):
-            try:
-                user = await client.get_users(uid)
-                status = getattr(user, "status", None)
-                status_type = type(status).__name__ if status else "Unknown"
-
-                is_online = status_type == "UserStatusOnline"
-                label = "🟢 ONLINE" if is_online else "🔴 OFFLINE"
-                prev = spy_targets.get(uid, {}).get("last_status")
-
-                if prev != is_online:
-                    spy_targets[uid]["last_status"] = is_online
-                    now = datetime.now().strftime("%H:%M:%S")
-                    await client.send_message(
-                        "me",
-                        f"🕵️ **SPY ALERT**\n👤 {name} (`{uid}`)\n{label}\n⏰ {now}"
-                    )
-            except Exception:
-                pass
-            await asyncio.sleep(30)
-
-    asyncio.create_task(_spy_loop())
+# 1. BOT KLIYENTI (Tugmalar va boshqaruv uchun)
+bot_app = Client(
+    "empire_bot_session",
+    api_id=config["API_ID"],
+    api_hash=config["API_HASH"],
+    bot_token=config["BOT_TOKEN"],
+    workdir=BASE_DIR,
+    in_memory=True,
+)
 
 
-@app.on_message(filters.me & cmd("massdm"))
-async def massdm_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.massdm [xabar]` — guruhdagi hammaga DM yuboradi")
+# ================= YORDAMCHI FUNKSIYALAR =================
+def parse_group_input(raw: str):
+    """Guruh username, ID yoki invite havolasini ajratib oladi."""
+    text = raw.strip()
+    if not text:
+        return None
 
-    msg_text = m.text.split(maxsplit=1)[1]
-    await m.edit_text("📨 A'zolar yig'ilmoqda...")
+    if text.lstrip("-").isdigit():
+        return int(text)
 
-    members = []
-    async for member in client.get_chat_members(m.chat.id, limit=5000):
-        u = member.user
-        if u.is_bot or u.is_deleted:
-            continue
-        members.append(u.id)
-
-    sent, failed = 0, 0
-    await m.edit_text(f"🚀 {len(members)} ta odamga DM yuborilmoqda...")
-
-    for uid in members:
-        try:
-            await client.send_message(uid, msg_text)
-            sent += 1
-            await asyncio.sleep(2)
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 5)
-        except Exception:
-            failed += 1
-
-    result = (
-        f"📨 **MassDM natijasi:**\n"
-        f"✅ Yuborildi: {sent} ta\n"
-        f"❌ Yuborilmadi: {failed} ta\n"
-        f"📊 Jami: {len(members)} ta"
+    invite_match = re.search(
+        r"(?:https?://)?(?:www\.)?t\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)",
+        text,
     )
-    await client.send_message("me", result)
-    await edit_msg(m, f"✅ **{sent}** ta yetkazildi | ❌ **{failed}** ta muvaffaqiyatsiz")
+    if invite_match:
+        return f"https://t.me/+{invite_match.group(1)}"
+
+    link_match = re.search(r"(?:https?://)?(?:www\.)?t\.me/([A-Za-z0-9_]+)", text)
+    if link_match:
+        username = link_match.group(1)
+        if username.lower() not in (
+            "joinchat",
+            "addstickers",
+            "share",
+            "proxy",
+            "socks",
+        ):
+            return username
+
+    if text.startswith("@"):
+        return text[1:]
+
+    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", text):
+        return text
+
+    return text
 
 
-scheduled_tasks = []
+async def resolve_chat_id(client, raw: str):
+    """Guruhni topadi; invite link bo'lsa avval qo'shiladi."""
+    target = parse_group_input(raw)
+    if not target:
+        raise ValueError("Guruh manzili bo'sh")
 
-@app.on_message(filters.me & cmd("schedule"))
-async def schedule_cmd(client, m):
-    # .schedule 18:30 Salom barchaga!
-    if len(m.command) < 3:
-        return await edit_msg(m, "`.schedule HH:MM [xabar]`\nMasalan: `.schedule 18:30 Salom!`")
-
-    time_str = m.command[1]
-    msg_text = m.text.split(maxsplit=2)[2]
-
-    try:
-        h, mi = map(int, time_str.split(":"))
-    except Exception:
-        return await edit_msg(m, "Vaqt formati noto'g'ri. `HH:MM` (masalan `18:30`)")
-
-    now = datetime.now()
-    target_dt = now.replace(hour=h, minute=mi, second=0, microsecond=0)
-    if target_dt <= now:
-        target_dt = target_dt.replace(day=now.day + 1)
-
-    wait_sec = (target_dt - now).total_seconds()
-    chat_id = m.chat.id
-
-    await edit_msg(m, f"⏰ Rejalashtirildi: **{time_str}** da yuboriladi.\n📝 Matn: `{msg_text}`")
-
-    async def _send_later():
-        await asyncio.sleep(wait_sec)
+    if isinstance(target, str) and target.startswith("https://t.me/+"):
         try:
-            await client.send_message(chat_id, msg_text)
-        except Exception as e:
-            await client.send_message("me", f"Schedule xatolik: {e}")
+            chat = await client.join_chat(target)
+        except UserAlreadyParticipant:
+            chat = await client.get_chat(target)
+        return chat.id, chat.title or "Guruh"
 
-    asyncio.create_task(_send_later())
-
-
-BACKUP_FILE = os.path.join(BASE_DIR, "vento_backup.json")
-
-@app.on_message(filters.me & cmd("backup"))
-async def backup_cmd(client, m):
-    await m.edit_text("💾 Backup qilinmoqda...")
-    data = {
-        "stickers": my_stickers,
-        "auto_replies": auto_replies,
-        "notes": my_notes if 'my_notes' in dir() else {},
-        "timestamp": datetime.now().isoformat()
-    }
-    with open(BACKUP_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    await client.send_document("me", BACKUP_FILE, caption="🗄 Vento Userbot Backup")
-    os.remove(BACKUP_FILE)
-    await edit_msg(m, "✅ Backup 'Saqlangan xabarlar' ga yuborildi!")
+    chat = await client.get_chat(target)
+    return chat.id, chat.title or str(target)
 
 
-@app.on_message(filters.me & cmd("restore"))
-async def restore_cmd(client, m):
-    if not m.reply_to_message or not m.reply_to_message.document:
-        return await edit_msg(m, "Backup faylga (.json) reply qiling!")
-    await m.edit_text("📂 Tiklanmoqda...")
-    try:
-        path = await client.download_media(m.reply_to_message)
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        os.remove(path)
-
-        if "stickers" in data:
-            my_stickers.update(data["stickers"])
-            save_json(STICKERS_FILE, my_stickers)
-        if "auto_replies" in data:
-            auto_replies.update(data["auto_replies"])
-
-        await edit_msg(m, f"✅ Backup tiklandi!\n📦 Stikerlar: {len(data.get('stickers',{}))}\n🤖 Auto-javoblar: {len(data.get('auto_replies',{}))}")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-# ═══════════════════════ MEGA UPGRADE ═══════════════════════
-auto_replies = {}
-typing_active = False
-typing_chat_id = None
-
-@app.on_message(filters.me & cmd("read"))
-async def read_cmd(client, m):
-    await m.edit_text("📖 Barcha xabarlar o'qilmoqda...")
-    count = 0
-    try:
-        async for dialog in client.get_dialogs():
-            try:
-                await client.read_chat_history(dialog.chat.id)
-                count += 1
-            except Exception:
-                pass
-        await edit_msg(m, f"✅ {count} ta chat o'qildi! Inbox tozalandi.")
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("dump"))
-async def dump_cmd(client, m):
-    if m.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return await edit_msg(m, "Faqat guruhlarda!")
-    await m.edit_text("📋 A'zolar ro'yxati olinmoqda...")
-    try:
-        lines = []
-        async for member in client.get_chat_members(m.chat.id):
-            u = member.user
-            uname = f"@{u.username}" if u.username else "Yoq"
-            name = f"{u.first_name or ''} {u.last_name or ''}".strip()
-            lines.append(f"{u.id} | {name} | {uname}")
-        
-        content = f"Guruh: {m.chat.title}\nJami: {len(lines)} ta\n\n" + "\n".join(lines)
-        fname = os.path.join(BASE_DIR, "members_dump.txt")
-        with open(fname, "w", encoding="utf-8") as f:
-            f.write(content)
-        await client.send_document(m.chat.id, fname, caption=f"📦 **{m.chat.title}** — {len(lines)} a'zo")
-        os.remove(fname)
-        await m.delete()
-    except Exception as e:
-        await edit_msg(m, f"❌ Xatolik: {e}")
-
-
-@app.on_message(filters.me & cmd("auto"))
-async def auto_cmd(_c, m):
-    global auto_replies
-    args = m.text.split("|", 1)
-    if len(args) < 2:
-        if auto_replies:
-            keys = "\n".join(f"• `{k}` → {v}" for k, v in auto_replies.items())
-            return await edit_msg(m, f"🤖 **Auto-javoblar:**\n{keys}")
-        return await edit_msg(m, "`.auto kalit | javob` — sozlash\n`.auto` — ro'yxat\n`.unauto kalit` — o'chirish")
-    trigger = args[0].replace(".auto", "").strip()
-    response = args[1].strip()
-    auto_replies[trigger.lower()] = response
-    await edit_msg(m, f"✅ Auto-javob saqlandi:\n`{trigger}` → `{response}`")
-
-
-@app.on_message(filters.me & cmd("unauto"))
-async def unauto_cmd(_c, m):
-    if len(m.command) < 2:
-        return await edit_msg(m, "`.unauto kalit`")
-    key = m.text.split(maxsplit=1)[1].strip().lower()
-    if key in auto_replies:
-        del auto_replies[key]
-        await edit_msg(m, f"✅ `{key}` o'chirildi.")
-    else:
-        await edit_msg(m, f"❌ `{key}` topilmadi.")
-
-
-@app.on_message(~filters.me)
-async def auto_reply_handler(client, message):
-    if not auto_replies:
-        return
-    text = (message.text or "").lower()
-    for trigger, response in auto_replies.items():
-        if trigger in text:
-            try:
-                await message.reply(response)
-            except Exception:
-                pass
-            break
-
-
-@app.on_message(filters.me & cmd("typingon"))
-async def typingon_cmd(client, m):
-    global typing_active, typing_chat_id
-    typing_active = True
-    typing_chat_id = m.chat.id
-    await m.delete()
-    asyncio.create_task(_typing_loop(client, m.chat.id))
-
-async def _typing_loop(client, chat_id):
-    global typing_active
-    while typing_active and typing_chat_id == chat_id:
-        try:
-            await client.send_chat_action(chat_id, ChatAction.TYPING)
-        except Exception:
-            break
-        await asyncio.sleep(4)
-
-
-@app.on_message(filters.me & cmd("typingoff"))
-async def typingoff_cmd(client, m):
-    global typing_active
-    typing_active = False
-    await m.delete()
-    try:
-        await client.send_chat_action(m.chat.id, ChatAction.CANCEL)
-    except Exception:
-        pass
-
-
-RAID_MESSAGES = [
-    "😂 Ketaver endi bro", "🤣 Bu savolga javob yoq", "💀 Endi nima deysan?",
-    "🙃 Hmm, jiddiy?", "😏 Aw bro...", "👀 OK...", "💅 Siz bilan gaplashib bo'lmaydi",
-    "🎭 Teatr oynamayapsizmi?", "🤡 OK clown", "😴 Uxlab qol yaxshisi",
-    "🔥 Yonib ketyapsan!", "🫡 Xizmat!", "📌 Eslab qol buni", "🙄 Voy-bo'y...",
-    "😤 Tushunmaydi ya"
-]
-
-@app.on_message(filters.me & cmd("raid"))
-async def raid_cmd(client, m):
-    count = int(m.command[1]) if len(m.command) > 1 and m.command[1].isdigit() else 5
-    count = min(count, 20)
-    rid = m.reply_to_message.id if m.reply_to_message else None
-    await m.delete()
-    for i in range(count):
-        msg_text = random.choice(RAID_MESSAGES)
-        try:
-            await client.send_message(m.chat.id, msg_text, reply_to_message_id=rid)
-            await asyncio.sleep(0.7)
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except Exception:
-            break
-
-
-@app.on_message(filters.me & cmd("load"))
-async def load_cmd(client, m):
-    label = m.text.split(maxsplit=1)[1] if len(m.command) > 1 else "Yuklanmoqda"
-    bar_frames = [
-        f"⏳ **{label}...**\n`[░░░░░░░░░░░░]` 0%",
-        f"⏳ **{label}...**\n`[██░░░░░░░░░░]` 15%",
-        f"⏳ **{label}...**\n`[████░░░░░░░░]` 30%",
-        f"⏳ **{label}...**\n`[██████░░░░░░]` 50%",
-        f"⏳ **{label}...**\n`[████████░░░░]` 65%",
-        f"⏳ **{label}...**\n`[██████████░░]` 82%",
-        f"⏳ **{label}...**\n`[████████████]` 99%",
-        f"✅ **{label} — Bajarildi!**\n`[████████████]` 100%",
-    ]
-    delays = [0.5, 0.6, 0.5, 0.8, 0.6, 0.7, 1.0, 0]
-    try:
-        for frame, delay in zip(bar_frames, delays):
-            await m.edit_text(frame)
-            if delay:
-                await asyncio.sleep(delay)
-    except Exception as e:
-        await edit_msg(m, f"❌ {e}")
-
-
-@app.on_message(filters.me & cmd(["doc", "document", "disclaimer", "huquq"]))
-async def doc_cmd(_c, m):
-    doc_text = """
-🏛 **RASMIY OGOHLANTIRISH VA BAYONONOMA** 🏛
-
-Ushbu akkauntda ishlatilayotgan barcha buyruqlar (`.hack`, `.dox`, `.scam` va boshqalar) **faqatgina ko'ngilochar (trolling) va hazil maqsadida** ishlab chiqilgan vizual effektlardan iborat. Ularning orqasida hech qanday haqiqiy kiberhujum, shaxsiy ma'lumotlarni o'g'irlash yoki kiberjinoyat yotmaydi. Barcha chiqarilgan "dox" IP manzillar, lokatsiyalar tasodifiy (random) algoritmlar orqali generatsiya qilingan xayoliy raqamlardir.
-
-⚠️ **QAT'IY OGOHLANTIRISH:**
-Meni ushbu vizual effektlar uchun kiberjinoyatda asossiz ayblash, huquqni muhofaza qiluvchi organlar bilan asossiz tahdid qilish yoki qo'rqitishning o'zi qonunchilikka muvofiq tegishli tartibda javobgarlikka tortilishga sabab bo'ladi:
-
-1️⃣ **O'zR MJtK 40-moddasi (Tuhmat):** Shaxsni jinoyatda asossiz ayblash va obro'sizlantirish.
-2️⃣ **O'zR JK 112-moddasi (O'ldirish yoki zo'rlik ishlatish bilan qo'rqitish):** Haqiqiy bo'lmagan narsani ro'kach qilib asossiz ruhiy bosim o'tkazish.
-3️⃣ **O'zR MJtK 41-moddasi (Haqorat qilish):** Shaxs qadr-qimmatini bemaqsad kamsitish.
-
-Iltimos, hazilni tushunmasangiz, internet va ijtimoiy tarmoqlardan foydalanish madaniyatini o'rganing. Asossiz tahdidlar uchun barcha yozishmalar darhol skrinshot qilinib, tegishli huquq-tartibot organlariga (O'zbekiston Respublikasi IIV Kiberxavfsizlik markaziga) sizning ustingizdan qarshi ariza bilan murojaat qilinishiga olib kelishi mumkin.
-
-_📄 Ushbu hujjat Vento Userbot tomonidan avtomatik tarzda shakllantirildi._
-"""
-    await edit_msg(m, doc_text)
-
-
-@app.on_message(filters.me & cmd("fast"))
-async def fast_cmd(client, m):
-    duration = int(m.command[1]) if len(m.command) > 1 and m.command[1].isdigit() else 10
-    duration = max(duration, 3)  # Minimum 3 sekund
-
-    await m.edit_text(f"⏱ **Tezlik o'lchanmoqda...**\n\n`{duration}` sekund qoldi")
-
-    latencies = []
-    start_total = time.time()
-
-    for remaining in range(duration - 1, -1, -1):
-        t0 = time.time()
-        try:
-            bar_filled = int((duration - remaining) / duration * 10)
-            bar = "█" * bar_filled + "░" * (10 - bar_filled)
-            await m.edit_text(
-                f"⏱ **Tezlik o'lchanmoqda...**\n"
-                f"`[{bar}]`\n"
-                f"`{remaining}` sekund qoldi"
-            )
-            t1 = time.time()
-            latencies.append(t1 - t0)
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
-
-    total_time = time.time() - start_total
-    total_msgs = len(latencies)
-
-    if total_msgs > 0:
-        avg_lat = sum(latencies) / total_msgs
-        # Format: 1 habar / X.XX s
-        speed_str = f"1 habar/{avg_lat:.2f}s"
-        min_lat = min(latencies)
-        max_lat = max(latencies)
-
-        await m.edit_text(
-            f"⚡️ **Telegram Tezlik Natijasi**\n\n"
-            f"📊 **Ulchangan:** `{total_msgs}` ta xabar\n"
-            f"🕒 **Davomiylik:** `{duration}` sekund\n\n"
-            f"🚀 **O'rtacha tezlik:** `{speed_str}`\n"
-            f"⬆️ **Eng tez:** `1 habar/{min_lat:.2f}s`\n"
-            f"⬇️ **Eng sekin:** `1 habar/{max_lat:.2f}s`\n\n"
-            + (
-                "🟢 **Baholash:** Zo'r! Bot juda tez" if avg_lat < 0.5
-                else "🟡 **Baholash:** Normal. Tarmoq yaxshi"
-                if avg_lat < 1.0
-                else "🔴 **Baholash:** Sekin. Tarmoq yoki Telegram serveri kuchsiz"
-            )
+def explain_telegram_error(error: Exception) -> str:
+    err = str(error)
+    if err.startswith("❌"):
+        return err
+    if isinstance(error, UsernameNotOccupied) or "USERNAME_NOT_OCCUPIED" in err:
+        return (
+            "❌ **Bunday @username topilmadi!**\n\n"
+            "Ehtimol:\n"
+            "• Guruh **nomi** emas, **@username** yuborilishi kerak\n"
+            "• Username xato yozilgan (`@empire_mafia` kabi)\n"
+            "• Guruh yopiq — **invite havola** yuboring: `https://t.me/+xxxxx`\n"
+            "• Guruh o'chirilgan yoki username o'zgartirilgan"
         )
-    else:
-        await m.edit_text("❌ O'lchab bo'lmadi.")
+    if isinstance(error, UserNotParticipant) or "USER_NOT_PARTICIPANT" in err:
+        return (
+            "❌ **Siz bu guruhda yo'qsiz!**\n\n"
+            "Scraper ishlashi uchun user akkauntingiz avval guruhga qo'shilishi kerak."
+        )
+    if isinstance(error, ChannelPrivate) or "CHANNEL_PRIVATE" in err:
+        return "❌ **Guruh yopiq!** Invite havola (`t.me/+...`) yuboring yoki guruhga qo'shiling."
+    if isinstance(error, InviteHashExpired) or "INVITE_HASH_EXPIRED" in err:
+        return "❌ **Invite havola muddati tugagan.** Yangi havola oling."
+    if "PEER_ID_INVALID" in err:
+        return "❌ **Guruh topilmadi.** Username yoki havolani tekshiring."
+    return f"❌ Xatolik yuz berdi.\n\n`{err}`"
 
 
-@app.on_message(filters.me & cmd("help"))
-async def help_cmd(_c, m):
-    help_text = """
-🛠 **Vento Userbot — TITAN Edition:**
+# ================= MA'LUMOTLAR BAZASI =================
+user_states = {}
+user_pagination = {}
+temp_add_users = {}
+temp_broadcast_count = {}
+active_tasks = {}
+stop_flags = {}
+last_commands = {}
+pagination_cooldown = {}
+tasks_lock = threading.Lock()
+COMMAND_COOLDOWN = 2.0  # 2 soniya cooldown
+PAGINATION_COOLDOWN = 0.8
+PAGINATION_SIZE = 50
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DATABASE_DIR = os.path.join(DATA_DIR, "database")
+SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(DATABASE_DIR, exist_ok=True)
 
-**🔹 Asosiy:** `.ping` `.fast` `.salom` `.yoz` `.tahrir` `.ochir` `.echo` `.type` `.dance` `.wiki` `.weather` `.tr` `.calc` `.time`
+# ================= SUBSCRIPTION TIZIMI =================
+SUBSCRIPTIONS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
+SUBSCRIPTION_PRICE_STARS = 100
+SUBSCRIPTION_DAYS = 30
 
-**🔸 Profil:** `.clone` `.revert` `.setname` `.bio` `.autobio`
+def load_subscriptions():
+    if not os.path.exists(SUBSCRIPTIONS_FILE):
+        return {}
+    try:
+        with open(SUBSCRIPTIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
 
-**👮 Admin/Guruh:** `.ban` `.mute` `.unmute` `.block` `.purge` `.promote` `.demote` `.kick` `.pin` `.unpin` `.loudpin` `.adminlist` `.botlist` `.join` `.leave`
-`.tagall` `.tagfun` `.gtag` `.bombtag` `.ring` `.stoptag` `.hack` `.unhack` `.deleted` `.anti-raid` `.antiflood`
+def save_subscriptions(subs):
+    with open(SUBSCRIPTIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(subs, f, indent=4)
 
-**🌟 Media/Troll:** `.st` `.save` `.s` `.list` `.sclear` `.voice` `.getid` `.steal` `.fake` `.q`
+STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 
-**🌐 Internet/Yuklash:** `.yt` `.song` `.fakecc` `.ytchat` `.ytchatstop`
+def load_stats():
+    if not os.path.exists(STATS_FILE):
+        return {"total_income": 0, "payments": [], "expired_subs": 0}
+    try:
+        with open(STATS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"total_income": 0, "payments": [], "expired_subs": 0}
 
-**💻 Hacker Mode:** `.eval` `.term` `.antidelete`
+def save_stats(stats):
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=4)
 
-**🕵️ Razvedka:** `.spy` `.observe` `.count` `.history` `.cinfo` `.id` `.sys` `.ip`
-
-**📬 Mass tarqatish:** `.massdm` `.scraper scan` `.scraper dm` `.scraper list`
-
-**⌚ Vaqt & Backup:** `.schedule` `.backup` `.restore`
-
-**🎮 O'yinlar:** `.dice` `.darts` `.basket` `.football`
-
-**🔧 Utilita:** `.qr` `.shorten` `.remind` `.note` `.b64e` `.b64d` `.fakecc`
-`.read` `.dump` `.auto` `.unauto` `.doc` `.raid` `.load`
-
-**⌨️ Yashirin:** `.typingon` `.typingoff`
-
-**🎨 Effektlar:** `.matrix` `.fire` `.glitch` `.happy` `.heart` `.moon` `.magic` `.gap`
-
-**💤 AFK:** `.afk` `.unafk`
-"""
-    await edit_msg(m, help_text)
-
-
-# ═══════════════════════ ISHGA TUSHIRISH ═══════════════════════
-_RESET = "\033[0m"
-_BOLD = "\033[1m"
-_CYAN = "\033[96m"
-_GREEN = "\033[92m"
-_YELLOW = "\033[93m"
-_RED = "\033[91m"
-_DIM = "\033[2m"
-
-SESSION_FILE = os.path.join(USERBOT_SESSION_DIR, "vento_userbot_v2.session")
-
-
-def _delete_session_safe():
-    gc.collect()
-    time.sleep(0.5)
-    for attempt in range(8):
+def is_subscribed(user_id):
+    if is_admin(user_id) or is_super_admin(user_id) or is_second_admin(user_id):
+        return True
+        
+    VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+    if os.path.exists(VIP_FILE):
         try:
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
-            journal = SESSION_FILE + "-journal"
-            if os.path.exists(journal):
-                os.remove(journal)
-            return True
-        except PermissionError:
-            time.sleep(1 + attempt * 0.5)
-            gc.collect()
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                vips = json.load(f)
+                # Eski format (list)
+                if isinstance(vips, list):
+                    if user_id in vips:
+                        return True
+                # Yangi format (dict)
+                elif isinstance(vips, dict):
+                    str_id = str(user_id)
+                    if str_id in vips:
+                        vip_data = vips[str_id]
+                        # Muddati bormi tekshirish
+                        if isinstance(vip_data, dict) and vip_data.get("expiry"):
+                            if time.time() > vip_data["expiry"]:
+                                return False  # Muddati tugagan
+                        return True
+        except:
+            pass
+        
+    subs = load_subscriptions()
+    str_id = str(user_id)
+    if str_id not in subs:
+        return False
+        
+    expiry = subs[str_id].get("expiry", 0)
+    if time.time() > expiry:
+        return False
+    return True
+
+async def subscription_checker():
+    while True:
+        try:
+            subs = load_subscriptions()
+            now = time.time()
+            changed = False
+            
+            for user_id_str, info in list(subs.items()):
+                expiry = info.get("expiry", 0)
+                warned = info.get("warned", False)
+                
+                # Check 1 day warning (86400 seconds)
+                if not warned and 0 < expiry - now <= 86400:
+                    try:
+                        await bot_app.send_message(
+                            int(user_id_str),
+                            "⚠️ **Diqqat!**\n\nSizning botdan foydalanish obunangiz tugashiga 1 kun qoldi.\n"
+                            "Obunangiz tugagach botdan foydalana olmaysiz."
+                        )
+                        subs[user_id_str]["warned"] = True
+                        changed = True
+                    except:
+                        pass
+                        
+                # Check expiry
+                if expiry > 0 and now >= expiry:
+                    try:
+                        await bot_app.send_message(
+                            int(user_id_str),
+                            "❌ **Obunangiz tugadi!**\n\nBotdan foydalanishni davom ettirish uchun obunani yangilashingiz kerak."
+                        )
+                    except:
+                        pass
+                    del subs[user_id_str]
+                    changed = True
+                    
+                    stats = load_stats()
+                    stats["expired_subs"] = stats.get("expired_subs", 0) + 1
+                    save_stats(stats)
+                    
+            if changed:
+                save_subscriptions(subs)
+                
+        except Exception as e:
+            pass
+            
+        await asyncio.sleep(3600)  # Check every hour
+
+# User sessionlarni boshqarish
+user_clients = {}  # {user_id: Client}
+clients_lock = threading.Lock()
+
+# Logged in users uchun ID tracking
+logged_in_users = set()  # {user_id}
+
+# Login uchun vaqtinchalik ma'lumotlar
+login_data = {}  # {user_id: {"phone": "...", "phone_code_hash": "...", "client": Client}}
+
+
+def get_user_client(user_id):
+    """User uchun client olish yoki yaratish"""
+    with clients_lock:
+        if user_id in user_clients:
+            return user_clients[user_id]
+
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
+        client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+        user_clients[user_id] = client
+        return client
+
+
+async def get_user_client_started(user_id):
+    """User uchun client olish va start qilish. Sessiya muddati o'tgan bo'lsa, tozalaydi."""
+    client = get_user_client(user_id)
+    if not client.is_connected:
+        try:
+            await client.connect()
+            # Sessiya haqiqiy ishlayotganini tekshirish
+            await client.get_me()
+        except Exception as e:
+            print(f"❌ Sessiya yuklashda xatolik (User: {user_id}): {e}")
+            try:
+                await client.disconnect()
+            except:
+                pass
+            with clients_lock:
+                user_clients.pop(user_id, None)
+            
+            session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+            if os.path.exists(session_path):
+                try:
+                    os.remove(session_path)
+                except:
+                    pass
+            
+            logged_in_users.discard(user_id)
+            user_states[user_id] = "login_phone"
+            
+            raise ValueError(
+                "❌ **Sessiyangiz muddati tugagan yoki faolsizlantirilgan!**\n\n"
+                "Sessiya o'chirildi. Iltimos, /start buyrug'ini berib qaytadan login qiling."
+            )
+    return client
+
+
+def is_user_logged_in(user_id):
+    """User login qilganmi tekshirish"""
+    # Xotiradagi emas, session fayl borligiga qarab tekshiramiz
+    session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+    if os.path.exists(session_path):
+        logged_in_users.add(user_id)
+        return True
     return False
 
 
-def run_bot():
-    print(STARTUP_BANNER)
-    print(f"{_GREEN}{'─' * 45}{_RESET}")
-    print(f"  {_BOLD}{_CYAN}⚡ Sistema yuklanmoqda...{_RESET}")
-    print(f"  {_GREEN}✅ Pyrogram Client    → {_RESET}tayyor")
-    print(f"  {_GREEN}✅ Buyruqlar          → {_RESET}yuklandi")
-    print(f"  {_GREEN}✅ Session            → {_RESET}sessions/vento_userbot_v2")
-    print(f"{_GREEN}{'─' * 45}{_RESET}\n")
+# ================= YORIQNOMA TUGMALARI =================
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    # Agar session fayli band bo'lsa, 3 marta urinib ko'ramiz
-    import sqlite3
-    for attempt in range(3):
+
+def api_id_guide_keyboard():
+    """API_ID yoriqnoma tugmasi"""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📖 Yo'riqnoma", callback_data="guide_api_id"),
+                InlineKeyboardButton("🖼 Masalan", callback_data="show_screenshots"),
+            ]
+        ]
+    )
+
+
+def api_hash_guide_keyboard():
+    """API_HASH yoriqnoma tugmasi"""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📖 Yo'riqnoma", callback_data="guide_api_hash"),
+                InlineKeyboardButton("🖼 Masalan", callback_data="show_screenshots"),
+            ]
+        ]
+    )
+
+
+@bot_app.on_callback_query(filters.regex("^guide_api_id$"))
+async def guide_api_id_callback(client, callback):
+    """API_ID yoriqnomasini ko'rsatish"""
+    text = (
+        "📖 **API_ID olish bo'yicha yoriqnoma:**\n\n"
+        "1️⃣ Quyidagi saytga o'ting:\n"
+        "[my.telegram.org](https://my.telegram.org)\n\n"
+        "2️⃣ Telegram bilan login qiling (telefon raqam + kod)\n\n"
+        "3️⃣ 'API development tools' bo'limiga o'ting\n\n"
+        "4️⃣ 'Create new application' tugmasini bosing\n\n"
+        "5️⃣ Ma'lumotlarni to'ldiring:\n"
+        "   - App title: Users (yoki ixtiyoriy 5+ harfli nom)\n"
+        "   - Short name: users (faqat inglizcha kichik harf va raqamlar)\n"
+        "   - Platform: Android\n"
+        "   _(yoki boshqacha yozishingiz ham mumkin, muhimi talabga javob bersa bo'ldi)_\n\n"
+        "6️⃣ 'Create application' tugmasini bosing\n\n"
+        "7️⃣ API_ID ni ko'ring (masalan: 12345678)\n\n"
+        "❌ Yopish uchun: /cancel"
+    )
+    await callback.message.edit_text(text, disable_web_page_preview=True)
+
+
+@bot_app.on_callback_query(filters.regex("^guide_api_hash$"))
+async def guide_api_hash_callback(client, callback):
+    """API_HASH yoriqnomasini ko'rsatish"""
+    text = (
+        "📖 **API_HASH olish bo'yicha yoriqnoma:**\n\n"
+        "1️⃣ Quyidagi saytga o'ting:\n"
+        "[my.telegram.org](https://my.telegram.org)\n\n"
+        "2️⃣ 'API development tools' bo'limiga o'ting\n\n"
+        "3️⃣ Siz yaratgan applicationni tanlang\n\n"
+        "4️⃣ API_HASH ni ko'ring (masalan: a1b2c3d4e5f6g7h8i9j0)\n\n"
+        "5️⃣ API_HASH ni nusxalab botga yuboring\n\n"
+        "❌ Yopish uchun: /cancel"
+    )
+    await callback.message.edit_text(text, disable_web_page_preview=True)
+
+
+@bot_app.on_callback_query(filters.regex("^show_screenshots$"))
+async def show_screenshots_callback(client, callback):
+    """Skrinshotlarni yuborish"""
+    await callback.answer(
+        "Skrinshotlar yuborilmoqda, biroz kuting...", show_alert=False
+    )
+
+    from pyrogram.types import InputMediaPhoto
+
+    media_group = [
+        InputMediaPhoto(
+            os.path.join(BASE_DIR, "assets", "step1.png"),
+            caption="1. my.telegram.org ga kirib telefon raqamni kiritasiz",
+        ),
+        InputMediaPhoto(
+            os.path.join(BASE_DIR, "assets", "step2.png"),
+            caption="2. Telegramdan kelgan kodni kiritasiz",
+        ),
+        InputMediaPhoto(
+            os.path.join(BASE_DIR, "assets", "step3.png"),
+            caption="3. 'API development tools' bo'limiga kirasiz",
+        ),
+        InputMediaPhoto(
+            os.path.join(BASE_DIR, "assets", "step4.png"),
+            caption="4. Application ma'lumotlarini to'ldirasiz",
+        ),
+        InputMediaPhoto(
+            os.path.join(BASE_DIR, "assets", "step5.png"),
+            caption="5. API_ID va API_HASH larni nusxalab olasiz",
+        ),
+    ]
+
+    try:
+        await client.send_media_group(callback.message.chat.id, media_group)
+    except Exception as e:
+        await callback.message.reply_text(f"❌ Rasmlarni yuborishda xatolik: {e}")
+
+
+# ================= ADMINLIK TIZIMI =================
+ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
+
+def load_admins():
+    if not os.path.exists(ADMINS_FILE):
+        return [8513957498, 8348307850]
+    try:
+        with open(ADMINS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return [8513957498, 8348307850]
+
+def save_admins(admins_list):
+    with open(ADMINS_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(set(admins_list)), f, indent=4)
+
+SUPER_ADMIN_ID = 8513957498
+SECOND_ADMIN_ID = 8348307850
+
+# Bot offline holati
+bot_offline = False
+
+def is_admin(user_id):
+    """Foydalanuvchi admin ekanligini tekshiradi"""
+    return user_id in load_admins() or user_id == SUPER_ADMIN_ID
+
+def is_super_admin(user_id):
+    """Foydalanuvchi bosh admin ekanligini tekshiradi"""
+    return user_id == SUPER_ADMIN_ID
+
+def is_second_admin(user_id):
+    """Foydalanuvchi ikkinchi admin ekanligini tekshiradi"""
+    return user_id == SECOND_ADMIN_ID
+
+
+# ================= XABARLARNI KUZATISH =================
+last_bot_messages = {}  # {user_id: {"message_id": int, "is_editable": bool}}
+
+
+async def send_or_edit_message(
+    client, target_id, text, reply_markup=None, force_new=False
+):
+    """Oxirgi xabarni edit qiladi yoki yangisini yuboradi"""
+    if not force_new and target_id in last_bot_messages:
+        last_msg = last_bot_messages[target_id]
+        if last_msg["is_editable"]:
+            try:
+                await client.edit_message_text(
+                    target_id,
+                    last_msg["message_id"],
+                    text,
+                    reply_markup=reply_markup,
+                )
+                return
+            except Exception:
+                pass  # Edit qilib bo'lmadi, yangi xabar yuboramiz
+
+    # Yangi xabar yuborish
+    try:
+        msg = await client.send_message(target_id, text, reply_markup=reply_markup)
+        last_bot_messages[target_id] = {"message_id": msg.id, "is_editable": True}
+        return msg
+    except Exception as e:
+        # Agar xabar yuborib bo'lmasa, oddiy reply_text ishlatamiz
         try:
-            app.run()
-            return
-        except AuthKeyUnregistered:
-            break
-        except KeyboardInterrupt:
-            print(f"{_YELLOW}\n  ⏹  Bot to'xtatildi.{_RESET}")
-            return
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                print(f"{_YELLOW}\n  ⚠️  Session fayli band, {3 - attempt} soniya kutilmoqda...{_RESET}")
-                time.sleep(3)
-                gc.collect()
-                if attempt == 2:
-                    print(f"{_RED}\n  ❌ Session ochib bo'lmadi. Boshqa bot oynasini yoping!{_RESET}")
-                    return
-            else:
-                print(f"{_RED}\n  ❌ Xatolik: {e}{_RESET}")
-                raise
-        except Exception as e:
-            print(f"{_RED}\n  ❌ Xatolik: {e}{_RESET}")
-            raise
+            msg = await client.send_message(target_id, text, reply_markup=reply_markup)
+            last_bot_messages[target_id] = {"message_id": msg.id, "is_editable": True}
+            return msg
+        except:
+            return None
 
-    # AuthKeyUnregistered — session eskirgan
-    print(f"{_RED}\n  ❌ SESSION ESKIRGAN — tozalanmoqda...{_RESET}")
-    if not _delete_session_safe():
-        print(f"{_RED}  Qo'lda o'chiring: {SESSION_FILE}{_RESET}")
+
+# ================= HIMOYA TIZIMI =================
+flood_protection = {}  # {user_id: {"count": int, "start_time": float, "blocked_until": float}}
+FLOOD_THRESHOLD = 10  # 10 soniyada 10 ta xabar
+FLOOD_BLOCK_TIME = 60  # 60 soniya blok
+FLOOD_WARNING_TIME = 30  # 30 soniya ogohlantirish
+
+blocked_users = {}  # {user_id: {"blocked_until": float, "reason": str, "warnings": int}}
+MAX_WARNINGS = 3  # 3 ta ogohlantirishdan keyin permanent blok
+
+
+def check_flood(user_id):
+    """Flood attack detection"""
+    now = time.time()
+
+    # Agar user bloklangan bo'lsa (permanent yoki temporary)
+    if user_id in blocked_users:
+        blocked_until = blocked_users[user_id].get("blocked_until", 0)
+        if blocked_until == 0:  # Permanent block
+            return (
+                f"🚫 **Siz bloklangansiz!**\n\nSabab: {blocked_users[user_id]['reason']}\n\nAdmin bilan bog'laning.",
+                True,
+            )
+        elif now < blocked_until:  # Temporary block
+            remaining = int(blocked_until - now)
+            return (
+                f"⚠️ **Flood himoya!**\n\nSiz juda tez xabar yuboryapsiz.\n⏳ {remaining} soniya kuting.",
+                True,
+            )
+        else:
+            # Block muddati tugadi, qaytadan boshlash
+            del blocked_users[user_id]
+
+    # Flood countni yangilash
+    if user_id not in flood_protection:
+        flood_protection[user_id] = {"count": 0, "start_time": now, "blocked_until": 0}
+
+    # 10 soniyadan o'tsa, countni qaytadan boshlash
+    if now - flood_protection[user_id]["start_time"] > 10:
+        flood_protection[user_id]["count"] = 0
+        flood_protection[user_id]["start_time"] = now
+
+    flood_protection[user_id]["count"] += 1
+
+    # Flood thresholdni tekshirish
+    if flood_protection[user_id]["count"] >= FLOOD_THRESHOLD:
+        # Userni bloklash
+        if user_id not in blocked_users:
+            blocked_users[user_id] = {"blocked_until": 0, "reason": "", "warnings": 0}
+
+        blocked_users[user_id]["warnings"] += 1
+        warnings = blocked_users[user_id]["warnings"]
+
+        if warnings >= MAX_WARNINGS:
+            # Permanent block
+            blocked_users[user_id]["blocked_until"] = 0
+            blocked_users[user_id]["reason"] = "Ko'p marta flood qilish"
+            flood_protection[user_id]["count"] = 0
+            return (
+                f"🚫 **PERMANENT BLOK!**\n\nSiz {MAX_WARNINGS} marta ogohlantirildingiz.\nEndi botdan foydalanish taqiqlandi.",
+                True,
+            )
+        else:
+            # Temporary block
+            block_time = FLOOD_BLOCK_TIME * warnings  # Har safar ko'payadi
+            blocked_users[user_id]["blocked_until"] = now + block_time
+            flood_protection[user_id]["count"] = 0
+            return (
+                f"⚠️ **FLOOD HIMOYA FAOL!**\n\nSiz juda ko'p xabar yubordingiz.\n⏳ {block_time} soniya bloklandingiz.\n⚠️ Ogohlantirish: {warnings}/{MAX_WARNINGS}",
+                True,
+            )
+
+    # Warning
+    if flood_protection[user_id]["count"] >= FLOOD_THRESHOLD - 3:
+        return (
+            f"⚠️ **Ogohlantirish!**\n\nTez-tez xabar yubormang.\nAks holda bloklanishingiz mumkin.",
+            False,
+        )
+
+    return None, False
+
+
+MENU_BUTTONS = frozenset(
+    {
+        "⚡ Super Scraper",
+        "🌐 Global Qidiruv",
+        "📮 Smart Xabarnoma",
+        "💾 Yig'ilgan Bazalar",
+        "🧠 Smart Yo'llanma",
+        "🛸 Shaxsiy Profil",
+        "💎 Premium Tariflar",
+        "🧬 Avto-Inviter",
+    }
+)
+
+DATABASE_BUTTONS = frozenset(
+    {
+        "➕ Yangi user(lar) qo'shish",
+        "🗑️ Bazani tozalash",
+        "🏠 Asosiy menyu",
+    }
+)
+
+SCRAPER_FILTERS = frozenset(
+    {
+        "⚡ Avtomatik (Tez)",
+        "📊 Xabarlar orqali (Sekin)",
+        "🌸 Qizlar (Filtrlangan)",
+        "👱‍♀️ Adminlar",
+    }
+)
+
+TASK_LABELS = {
+    "scrape": "⚡ Super Scraper",
+    "broadcast": "📮 Smart Xabarnoma",
+    "search": "🌐 Global Qidiruv",
+    "utag": "🧠 Smart Yo'llanma",
+}
+
+DEDUP_EXEMPT = frozenset({"❌ Bekor qilish", "/cancel"})
+
+scraper_selections = {}
+
+
+def get_active_task(user_id):
+    with tasks_lock:
+        return active_tasks.get(user_id)
+
+
+def acquire_task(user_id, task_name):
+    with tasks_lock:
+        current = active_tasks.get(user_id)
+        if current:
+            return False, current
+        active_tasks[user_id] = task_name
+        return True, None
+
+
+async def cleanup_user_client(user_id):
+    """Userning clientini xotiradan tozalaydi va ulanishni yopadi (Xotirani tejash uchun)"""
+    with clients_lock:
+        client = user_clients.pop(user_id, None)
+    if client:
+        try:
+            if client.is_connected:
+                await client.disconnect()
+        except:
+            pass
+
+def release_task(user_id, task_name, cleanup=False):
+    """Taskni bo'shatadi. cleanup=True bo'lsa clientni ham tozalaydi."""
+    with tasks_lock:
+        if active_tasks.get(user_id) == task_name:
+            active_tasks.pop(user_id, None)
+    stop_flags.pop(user_id, None)
+    if cleanup:
+        asyncio.create_task(cleanup_user_client(user_id))
+
+
+def is_duplicate_command(user_id, text):
+    now = time.time()
+    with tasks_lock:
+        prev = last_commands.get(user_id)
+        if prev and prev["text"] == text and now - prev["time"] < COMMAND_COOLDOWN:
+            return True
+        last_commands[user_id] = {"text": text, "time": now}
+        return False
+
+
+def active_task_message(task_name):
+    return f"⚠️ **{TASK_LABELS.get(task_name, task_name)}** hali ishlayapti. Tugashini kuting."
+
+
+if not os.path.exists(DATABASE_DIR):
+    os.makedirs(DATABASE_DIR)
+
+
+
+import random
+from datetime import datetime
+
+def get_user_json_file(user_id):
+    return os.path.join(DATABASE_DIR, f"users_{user_id}.json")
+
+def migrate_database(user_id):
+    txt_file = os.path.join(DATABASE_DIR, f"users_{user_id}.txt")
+    json_file = get_user_json_file(user_id)
+    if os.path.exists(txt_file) and not os.path.exists(json_file):
+        with open(txt_file, "r", encoding="utf-8") as f:
+            users = [line.strip() for line in f if line.strip()]
+        if users:
+            data = {
+                "databases": {
+                    "1000": {
+                        "title": "Eski baza",
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "users": users
+                    }
+                },
+                "selected_db": "1000"
+            }
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        try:
+            os.remove(txt_file)
+        except:
+            pass
+
+def get_all_databases(user_id):
+    migrate_database(user_id)
+    json_file = get_user_json_file(user_id)
+    if not os.path.exists(json_file):
+        return {}
+    try:
+        with open(json_file, "r", encoding="utf-8") as f:
+            return json.load(f).get("databases", {})
+    except:
+        return {}
+
+def get_database(user_id, db_id):
+    dbs = get_all_databases(user_id)
+    return dbs.get(str(db_id), {})
+
+def save_database(user_id, title, new_users, db_id=None):
+    migrate_database(user_id)
+    json_file = get_user_json_file(user_id)
+    data = {"databases": {}, "selected_db": None}
+    if os.path.exists(json_file):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except:
+            pass
+    
+    if not db_id:
+        # Generate random 4-digit ID
+        while True:
+            db_id = str(random.randint(1000, 9999))
+            if db_id not in data["databases"]:
+                break
+    else:
+        db_id = str(db_id)
+        
+    existing_users = data["databases"].get(db_id, {}).get("users", [])
+    updated_users = list(set(existing_users) | set(new_users))
+    
+    data["databases"][db_id] = {
+        "title": title,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "users": updated_users
+    }
+    data["selected_db"] = db_id
+    
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+        
+    return db_id
+
+def clear_user_database(user_id, db_id=None):
+    json_file = get_user_json_file(user_id)
+    if not os.path.exists(json_file):
+        return
+        
+    if db_id is None:
+        # Clear all
+        if os.path.exists(json_file):
+            os.remove(json_file)
+    else:
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if str(db_id) in data["databases"]:
+                del data["databases"][str(db_id)]
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+def load_user_database(user_id):
+    migrate_database(user_id)
+    json_file = get_user_json_file(user_id)
+    if not os.path.exists(json_file):
+        return []
+    try:
+        with open(json_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            selected = data.get("selected_db")
+            if selected and selected in data.get("databases", {}):
+                return data["databases"][selected].get("users", [])
+            return []
+    except:
+        return []
+
+
+
+def format_user_batch(total, batch_usernames, start_num, end_num):
+    lines = [
+        f"📊 Yig'ildi: {total} user",
+        f"({start_num}-{end_num})",
+        "",
+    ]
+    lines.extend(batch_usernames)
+    return "\n".join(lines)
+
+
+def get_total_pages(count, batch_size=PAGINATION_SIZE):
+    return max(1, (count + batch_size - 1) // batch_size)
+
+
+def get_page_slice(usernames, page, batch_size=PAGINATION_SIZE):
+    start = page * batch_size
+    chunk = usernames[start : start + batch_size]
+    return chunk, start + 1, start + len(chunk)
+
+
+def build_nav_keyboard(page, total_users, batch_size=PAGINATION_SIZE):
+    if total_users <= batch_size:
+        return None
+
+    total_pages = get_total_pages(total_users, batch_size)
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton("⬅️ Oldingi", callback_data="pg:prev"))
+    if page < total_pages - 1:
+        row.append(InlineKeyboardButton("➡️ Orqaga", callback_data="pg:next"))
+    row.append(InlineKeyboardButton("❌ Yopish", callback_data="pg:close"))
+    return InlineKeyboardMarkup([row])
+
+
+def show_paginated_users(client, target_id, usernames, page=0):
+    total = len(usernames)
+    chunk, start_num, end_num = get_page_slice(usernames, page)
+    text = format_user_batch(total, chunk, start_num, end_num)
+    keyboard = build_nav_keyboard(page, total)
+
+    user_pagination[target_id] = {"usernames": usernames, "page": page}
+    asyncio.create_task(client.send_message(target_id, text, reply_markup=keyboard))
+
+
+def interruptible_sleep(seconds, stop_event, step=0.5):
+    elapsed = 0.0
+    while elapsed < seconds:
+        if stop_event.is_set():
+            return True
+        time.sleep(min(step, seconds - elapsed))
+        elapsed += step
+    return stop_event.is_set()
+
+
+def chunk_list(items, batch_size):
+    for i in range(0, len(items), batch_size):
+        yield items[i : i + batch_size]
+
+
+async def scrape_task(
+    target_id, raw_group, filter_type="⚡ Avtomatik (Tez)", message_count=None
+):
+    try:
+        user_client = await get_user_client_started(target_id)
+        chat_id, chat_title = await resolve_chat_id(user_client, raw_group)
+
+        if filter_type == "📊 Xabarlar orqali (Sekin)":
+            max_messages = message_count if message_count else 1000
+            # Boshlang'ich xabar
+            await bot_app.send_message(
+                target_id,
+                f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {max_messages:,} ta xabar o'qiladi.",
+            )
+
+            scraped = set()
+            msg_count = 0
+            progress_interval = max(
+                100, max_messages // 100
+            )  # Dynamic progress reporting
+
+            async for message in user_client.get_chat_history(
+                chat_id, limit=max_messages
+            ):
+                if stop_flags.get(target_id):
+                    break
+                if (
+                    message.from_user
+                    and not message.from_user.is_bot
+                    and message.from_user.username
+                ):
+                    scraped.add(f"@{message.from_user.username}")
+                msg_count += 1
+                if msg_count % progress_interval == 0:
+                    # Progress update - edit qilish
+                    try:
+                        if target_id in last_bot_messages:
+                            await bot_app.edit_message_text(
+                                target_id,
+                                last_bot_messages[target_id]["message_id"],
+                                f"🔍 **{chat_title}** guruhidan xabarlar o'qilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {msg_count:,}/{max_messages:,} ta xabar o'qildi...",
+                            )
+                    except:
+                        pass  # Edit qilib bo'lmadi, davom etamiz
+
+        else:
+            # Boshlang'ich xabar
+            await bot_app.send_message(
+                target_id,
+                f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ 0 ta user yig'ildi...",
+            )
+
+            scraped = set()
+            member_count = 0
+            progress_interval = 50  # Har 50 ta userdan keyin update
+
+            async for member in user_client.get_chat_members(chat_id):
+                if stop_flags.get(target_id):
+                    break
+                if member.user.is_bot or not member.user.username:
+                    continue
+
+                username = f"@{member.user.username}"
+
+                if filter_type == "⚡ Avtomatik (Tez)":
+                    scraped.add(username)
+
+                elif filter_type == "👱‍♀️ Adminlar":
+                    if member.status in ("creator", "administrator"):
+                        scraped.add(username)
+
+                elif filter_type == "🌸 Qizlar (Filtrlangan)":
+                    username_lower = member.user.username.lower()
+
+                    # 1. Username oxiri 'a' bilan tugaganlar (raqamdan oldingi harfga qarab)
+                    # Oxirgi harfni topish (raqamlarni e'tiborsiz qoldirish)
+                    last_char = None
+                    for char in reversed(username_lower):
+                        if char.isalpha():
+                            last_char = char
+                            break
+
+                    if last_char == "a":
+                        scraped.add(username)
+                    else:
+                        # 2. Tarkibida ayol ismlari bo'lganlar
+                        female_keywords = [
+                            "gul",
+                            "niso",
+                            "bibi",
+                            "khan",
+                            "xon",
+                            "begim",
+                            "oy",
+                            "mariya",
+                            "nigora",
+                            "sevara",
+                            "dilnoza",
+                            "malika",
+                            "zuhra",
+                            "nargiza",
+                            "kamola",
+                            "mavjuda",
+                            "shahnoza",
+                            "aziza",
+                            "fatima",
+                            "zaynab",
+                            "aisha",
+                            "khadija",
+                            "mukarram",
+                            "makhsuma",
+                            "zahra",
+                            "ruziya",
+                            "mubina",
+                            "salima",
+                            "habiba",
+                            "jamila",
+                            "latifa",
+                            "nafisa",
+                            "safiya",
+                            "sumaya",
+                            "ummu",
+                            "aysha",
+                            "fotima",
+                            "hafsa",
+                            "sawda",
+                            "ruqayya",
+                            "kulthum",
+                            "aliya",
+                            "amina",
+                            "asfiya",
+                            "baraka",
+                            "bushra",
+                            "dalia",
+                            "eisha",
+                            "fariha",
+                            "ghada",
+                            "haniya",
+                            "imana",
+                            "jana",
+                            "kadija",
+                            "laila",
+                            "mahira",
+                            "nadia",
+                            "omar",
+                            "parveen",
+                            "qasira",
+                            "raisa",
+                            "sana",
+                            "tahira",
+                            "umara",
+                            "wafa",
+                            "yamila",
+                            "zara",
+                            "zoya",
+                            "nur",
+                            "noor",
+                            "shams",
+                            "hilal",
+                            "badr",
+                            "najma",
+                            "sitar",
+                            "anahita",
+                            "anara",
+                            "arzu",
+                            "asal",
+                            "barakat",
+                            "bina",
+                            "bonu",
+                            "dila",
+                            "dilbara",
+                            "dildora",
+                            "dilfuza",
+                            "dilrabo",
+                            "dilshoda",
+                            "elina",
+                            "eliza",
+                            "emira",
+                            "farangiz",
+                            "farida",
+                            "feruza",
+                            "gavhar",
+                            "gulandom",
+                            "gulbahor",
+                            "gulchehra",
+                            "guldasta",
+                            "gulira",
+                            "gulnara",
+                            "gulnoza",
+                            "gulruhsora",
+                            "gulshoda",
+                            "gulsanam",
+                            "gulzara",
+                            "hadicha",
+                            "hayola",
+                            "hilola",
+                            "humora",
+                            "inobat",
+                            "kamola",
+                            "kumush",
+                            "lola",
+                            "malika",
+                            "maftuna",
+                            "makhsuma",
+                            "mavjuda",
+                            "mavzuna",
+                            "mehriniso",
+                            "mohira",
+                            "mubina",
+                            "mukarrama",
+                            "muslima",
+                            "nafisa",
+                            "nargiza",
+                            "nigora",
+                            "niso",
+                            "nodira",
+                            "noila",
+                            "nurida",
+                            "nurjahan",
+                            "nurkhon",
+                            "nurliyo",
+                            "nurshoda",
+                            "nurzoda",
+                            "parvina",
+                            "rano",
+                            "rakhima",
+                            "ramina",
+                            "ravshana",
+                            "raykhona",
+                            "roya",
+                            "roziya",
+                            "ruhida",
+                            "ruhijon",
+                            "ruziya",
+                            "sabina",
+                            "sadiya",
+                            "safina",
+                            "sahar",
+                            "saliha",
+                            "salima",
+                            "samira",
+                            "sana",
+                            "sanobar",
+                            "sarvinoz",
+                            "sevinch",
+                            "shahida",
+                            "shahnoza",
+                            "sharifa",
+                            "shirin",
+                            "shodiyona",
+                            "shukrona",
+                            "sitora",
+                            "sumayya",
+                            "surayyo",
+                            "tabassum",
+                            "tahira",
+                            "tamina",
+                            "tanzila",
+                            "tarona",
+                            "umida",
+                        ]
+                        if any(
+                            keyword in username_lower for keyword in female_keywords
+                        ):
+                            scraped.add(username)
+
+                member_count += 1
+                if member_count % progress_interval == 0:
+                    # Progress update - edit qilish
+                    try:
+                        if target_id in last_bot_messages:
+                            await bot_app.edit_message_text(
+                                target_id,
+                                last_bot_messages[target_id]["message_id"],
+                                f"🔍 **{chat_title}** guruhidan userlar yig'ilmoqda...\n📌 Filtr: {filter_type}\n\n⏳ {len(scraped)} ta user yig'ildi...",
+                            )
+                    except:
+                        pass  # Edit qilib bo'lmadi, davom etamiz
+
+        if not scraped:
+            await bot_app.send_message(
+                target_id,
+                f"❌ **{chat_title}** guruhida filtr bo'yicha user topilmadi.",
+            )
+            return
+
+        # We save this scrape session to a new database
+        existing = []
+        existing_set = set()
+        new_count = len(scraped)
+        all_users = [u for u in sorted(scraped)]
+        db_id = save_database(target_id, chat_title, all_users)
+
+        scraped_list = sorted(scraped, key=str.lower)
+        await bot_app.send_message(
+            target_id,
+            f"✅ **{chat_title}** guruhidan **{len(scraped_list)}** ta user yig'ildi!\n"
+            f"💾 Bazaga **{new_count}** ta yangi qo'shildi (jami: **{len(all_users)}**).",
+        )
+        show_paginated_users(bot_app, target_id, scraped_list)
+
+    except Exception as e:
+        await bot_app.send_message(target_id, explain_telegram_error(e))
+    finally:
+        release_task(target_id, "scrape", cleanup=True)
+
+
+async def broadcast_task(target_id, recipients, body, auto_delete=False):
+    try:
+        user_client = await get_user_client_started(target_id)
+        success = 0
+        failed = 0
+        total = len(recipients)
+        
+        last_edit_time = time.time()
+        
+        sent_messages_history = []
+
+        await send_or_edit_message(
+            bot_app,
+            target_id,
+            f"📤 **Xabar yuborish boshlandi...**\n\n"
+            f"📊 Jami: **{total}** ta user\n"
+            f"⏳ Jarayon davom etmoqda...",
+        )
+
+        for idx, username in enumerate(recipients):
+            if stop_flags.get(target_id):
+                break
+            try:
+                # Remove @ prefix if present for Pyrogram
+                clean_username = username.lstrip('@')
+                sent_msg = await user_client.send_message(clean_username, body)
+                success += 1
+                if sent_msg:
+                    sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 5)
+                try:
+                    sent_msg = await user_client.send_message(clean_username, body)
+                    success += 1
+                    if sent_msg:
+                        sent_messages_history.append({"chat_id": sent_msg.chat.id, "message_id": sent_msg.id})
+                except Exception:
+                    failed += 1
+            except (PeerIdInvalid, UserPrivacyRestricted, Exception) as e:
+                failed += 1
+                # Log the actual error for debugging
+                print(f"❌ Failed to send to {username}: {type(e).__name__}: {e}")
+
+            current_time = time.time()
+            if current_time - last_edit_time >= 2.0 or (success + failed) == total:
+                try:
+                    if target_id in last_bot_messages:
+                        progress = success + failed
+                        percent = (progress / total) * 100
+                        bar_len = 10
+                        filled = int(percent / 10)
+                        bar = "▓" * filled + "░" * (bar_len - filled)
+                        
+                        await bot_app.edit_message_text(
+                            target_id,
+                            last_bot_messages[target_id]["message_id"],
+                            f"📤 **Xabar yuborilmoqda...**\n\n"
+                            f"[{bar}] {percent:.1f}%\n"
+                            f"📊 Yuborilgan userlar: **{progress}/{total}**\n\n"
+                            f"✅ Muvaffaqiyatli: **{success}** ta\n"
+                            f"❌ Yuborilmadi: **{failed}** ta",
+                        )
+                        last_edit_time = current_time
+                except Exception:
+                    pass
+
+            await asyncio.sleep(3)
+
+        # Save history to file
+        history_file = os.path.join(DATA_DIR, f"broadcast_history_{target_id}.json")
+        try:
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(sent_messages_history, f)
+        except Exception:
+            pass
+
+        markup = None
+        if sent_messages_history:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ Barcha yuborilganlarni o'chirish", callback_data="delete_broadcast")]
+            ])
+
+        await bot_app.send_message(
+            target_id,
+            f"✅ **Xabar yuborish tugadi!**\n\n"
+            f"📤 Yuborildi: **{success}** ta\n"
+            f"❌ Yuborilmadi: **{failed}** ta\n"
+            f"📊 Jami: **{total}** ta\n\n"
+            f"💡 *Agar xabarlarni barchadan o'chirib tashlamoqchi bo'lsangiz, pastdagi tugmani bosing.*",
+            reply_markup=markup
+        )
+        
+        # O'zgarishsiz qoldirish uchun main_menu ham yuboramiz
+        await send_or_edit_message(bot_app, target_id, "🏠 Asosiy menyu", reply_markup=main_menu())
+        
+    except Exception as e:
+        await send_or_edit_message(
+            bot_app, target_id, explain_telegram_error(e), reply_markup=main_menu()
+        )
+    finally:
+        release_task(target_id, "broadcast", cleanup=True)
+
+
+# ================= MENYU =================
+def main_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("⚡ Super Scraper"), KeyboardButton("🧬 Avto-Inviter")],
+            [KeyboardButton("📮 Smart Xabarnoma"), KeyboardButton("🌐 Global Qidiruv")],
+            [KeyboardButton("💾 Yig'ilgan Bazalar"), KeyboardButton("🛸 Shaxsiy Profil")],
+            [KeyboardButton("💎 Premium Tariflar"), KeyboardButton("🧠 Smart Yo'llanma")],
+        ],
+        resize_keyboard=True,
+        placeholder="Bo'limni tanlang...",
+    )
+
+
+def cancel_menu():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("❌ Bekor qilish")]], resize_keyboard=True
+    )
+
+def broadcast_count_menu():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("Barchasiga yuborish")], [KeyboardButton("❌ Bekor qilish")]],
+        resize_keyboard=True,
+    )
+
+
+def database_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("➕ Yangi user(lar) qo'shish")],
+            [KeyboardButton("🗑️ Bazani tozalash"), KeyboardButton("🏠 Asosiy menyu")]
+        ],
+        resize_keyboard=True,
+        placeholder="Baza bo'limi...",
+    )
+
+
+def confirm_delete_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("✅ Ha, tozalash"), KeyboardButton("❌ Bekor qilish")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def scraper_filter_menu():
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton("⚡ Avtomatik (Tez)"),
+                KeyboardButton("📊 Xabarlar orqali (Sekin)"),
+            ],
+            [KeyboardButton("🌸 Qizlar (Filtrlangan)"), KeyboardButton("👱‍♂️ Adminlar")],
+            [KeyboardButton("❌ Bekor qilish")],
+        ],
+        resize_keyboard=True,
+        placeholder="Filtrni tanlang...",
+    )
+
+
+# ================= U-TAG VAZIFASI =================
+async def utag_task(user_id, chat_identifier, text):
+    try:
+        user_client = await get_user_client_started(user_id)
+        
+        # Odamlarni to'plash
+        await bot_app.send_message(user_id, "⏳ Guruh a'zolari to'planmoqda...")
+        
+        # chat_identifier orqali guruhni topish (agar matn bo'lsa, API orqali topadi va cache muammosi bo'lmaydi)
+        try:
+            if isinstance(chat_identifier, str):
+                chat_id, _ = await resolve_chat_id(user_client, chat_identifier)
+            else:
+                chat_id = chat_identifier
+                await user_client.get_chat(chat_id)
+        except (PeerIdInvalid, ValueError) as e:
+            if isinstance(e, ValueError) and "Peer id invalid" not in str(e).lower():
+                raise e
+            async for _ in user_client.get_dialogs(limit=100):
+                pass
+            chat_id = chat_identifier
+            await user_client.get_chat(chat_id)
+            
+        members = []
+        async for member in user_client.get_chat_members(chat_id):
+            if stop_flags.get(user_id):
+                break
+            if not member.user.is_bot and not member.user.is_deleted:
+                members.append(member.user)
+                
+        # Xabar yuborish
+        count = 0
+        for member in members:
+            if stop_flags.get(user_id):
+                break
+                
+            mention = f"[{member.first_name}](tg://user?id={member.id})"
+            msg = f"{mention}\n{text}" if text else mention
+            
+            try:
+                await user_client.send_message(chat_id, msg)
+                count += 1
+                await asyncio.sleep(1.5)
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 2)
+            except Exception as e:
+                pass
+                
+        await bot_app.send_message(user_id, f"✅ U-Tag yakunlandi! ({count} ta a'zo tag qilindi)")
+    except Exception as e:
+        await bot_app.send_message(user_id, f"❌ U-Tag xatosi: {e}")
+    finally:
+        release_task(user_id, "utag", cleanup=True)
+
+async def inviter_task(user_id, chat_identifier, target_db_id, limit):
+    client = await get_user_client_started(user_id)
+    try:
+        # Bazadan usernamelarni olish
+        json_file = get_user_json_file(user_id)
+        with open(json_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        users_to_add = data["databases"][target_db_id].get("users", [])
+        if not users_to_add:
+            await send_or_edit_message(bot_app, user_id, "❌ Bu bazada odam qolmagan.")
+            return
+
+        # Limitni tekshiramiz
+        if limit and limit < len(users_to_add):
+            users_to_add = users_to_add[:limit]
+
+        chat_id, chat_title = await resolve_chat_id(client, chat_identifier)
+        
+        from pyrogram.types import ReplyKeyboardRemove
+        await send_or_edit_message(
+            bot_app,
+            user_id,
+            f"🚀 **Avto-Inviter boshlandi!**\n\n"
+            f"Guruh: {chat_title}\n"
+            f"Qo'shiladiganlar soni: {len(users_to_add)} ta\n"
+            f"O'rtacha vaqt: {len(users_to_add) * 5} soniya\n\n"
+            f"Iltimos, kuting... To'xtatish uchun /stop bosing.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        added = 0
+        failed = 0
+        stop_flags[user_id] = False
+        batch_size = 5
+        
+        for i in range(0, len(users_to_add), batch_size):
+            if stop_flags.get(user_id):
+                await send_or_edit_message(bot_app, user_id, "🛑 Inviter to'xtatildi!")
+                break
+                
+            batch = users_to_add[i:i+batch_size]
+            
+            clean_batch = []
+            for u in batch:
+                if isinstance(u, str) and u.startswith("@"):
+                    clean_batch.append(u[1:])
+                else:
+                    clean_batch.append(u)
+                    
+            try:
+                await client.add_chat_members(chat_id, clean_batch)
+                added += len(clean_batch)
+                
+                # O'zimizning bazadan o'chirish
+                for u in batch:
+                    try:
+                        data["databases"][target_db_id]["users"].remove(u)
+                    except:
+                        pass
+                        
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                    
+                await asyncio.sleep(15) # Flood oldini olish uchun 15 sek dam
+            except FloodWait as e:
+                await send_or_edit_message(bot_app, user_id, f"⚠️ Telegram kutish vaqti. {e.value} soniya kutilmoqda...")
+                await asyncio.sleep(e.value + 5)
+            except Exception as e:
+                failed += len(clean_batch)
+                await asyncio.sleep(5)
+                
+        await send_or_edit_message(
+            bot_app,
+            user_id,
+            f"✅ **Avto-Inviter yakunlandi!**\n\n"
+            f"Muvaffaqiyatli qo'shildi: {added} ta\n"
+            f"Xatolik yoki ruxsat yo'q: {failed} ta",
+            reply_markup=main_menu()
+        )
+
+    except Exception as e:
+        err_msg = explain_telegram_error(e)
+        await send_or_edit_message(bot_app, user_id, err_msg)
+    finally:
+        release_task(user_id, "inviter", cleanup=True)
+
+# ================= PAYMENT HANDLERLAR =================
+@bot_app.on_pre_checkout_query()
+async def pre_checkout(client, query: PreCheckoutQuery):
+    user_id = query.from_user.id
+    if is_subscribed(user_id):
+        await query.answer(ok=False, error_message="❌ Sizda allaqachon faol obuna mavjud.")
+    else:
+        await query.answer(ok=True)
+
+@bot_app.on_message(filters.successful_payment)
+async def successful_payment(client, message: Message):
+    user_id = message.from_user.id
+    charge_id = message.successful_payment.telegram_payment_charge_id
+    amount = message.successful_payment.total_amount
+    first_name = message.from_user.first_name or "Foydalanuvchi"
+    
+    # Pendings log
+    pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
+    try:
+        with open(pendings_file, "r") as f:
+            pendings = json.load(f)
+    except:
+        pendings = {}
+        
+    pendings[str(user_id)] = {
+        "charge_id": charge_id,
+        "amount": amount,
+        "time": time.time(),
+        "first_name": first_name
+    }
+    with open(pendings_file, "w") as f:
+        json.dump(pendings, f, indent=4)
+        
+    await message.reply_text("⏳ **To'lov qabul qilindi.**\n\nBotdan foydalanish uchun admin tasdig'i kutilmoqda. Iltimos, biroz kuting...")
+    
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"sub_approve:{user_id}")],
+        [InlineKeyboardButton("❌ Taqiqlash (Qaytarish)", callback_data=f"sub_reject:{user_id}")],
+        [InlineKeyboardButton("🔍 Umumiy guruhlar", callback_data=f"sub_common:{user_id}")]
+    ])
+    
+    phone = f"+{message.from_user.phone_number}" if message.from_user.phone_number else "Yashirin"
+    username = f" (@{message.from_user.username})" if message.from_user.username else ""
+    admins_list = load_admins()
+    if SUPER_ADMIN_ID not in admins_list:
+        admins_list.append(SUPER_ADMIN_ID)
+        
+    for admin_id in list(set(admins_list)):
+        try:
+            await bot_app.send_message(
+                admin_id,
+            f"🆕 **Yangi obuna to'lovi!**\n\n"
+            f"👤 Foydalanuvchi: [{first_name}](tg://user?id={user_id}){username}\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"📱 Nomer: {phone}\n"
+            f"💰 Miqdor: {amount} Stars\n\n"
+            f"Foydalanuvchi botga qo'shilyapti, tasdiqlaysizmi?",
+            reply_markup=markup
+        )
+        except Exception as e:
+            print(f"Adminga xabar yuborishda xatolik ({admin_id}):", e)
+
+
+@bot_app.on_callback_query(filters.regex("^sub_common:"))
+async def handle_sub_common(client, callback_query):
+    user_id = int(callback_query.data.split(":")[1])
+    try:
+        admin_client = None
+        if is_user_logged_in(SUPER_ADMIN_ID):
+            admin_client = await get_user_client_started(SUPER_ADMIN_ID)
+            
+        if not admin_client:
+            await callback_query.answer("Sizning user akkauntingiz botga ulanmagan. Umumiy guruhlarni ko'rish imkonsiz.", show_alert=True)
+            return
+            
+        common_chats = await admin_client.get_common_chats(user_id)
+        if not common_chats:
+            await callback_query.answer("Sizning user akkauntingiz va bu foydalanuvchi o'rtasida hech qanday umumiy guruh topilmadi.", show_alert=True)
+            return
+            
+        text = f"🔍 **Foydalanuvchi bilan umumiy guruhlar ({len(common_chats)} ta):**\n\n"
+        for i, chat in enumerate(common_chats[:50], 1):
+            text += f"{i}. {chat.title}\n"
+            
+        if len(common_chats) > 50:
+            text += f"... va yana {len(common_chats) - 50} ta guruh."
+            
+        await callback_query.message.reply_text(text)
+        await callback_query.answer()
+    except Exception as e:
+        await callback_query.answer(f"Xatolik yuz berdi. Ehtimol userbotingiz ishlamayapti: {e}", show_alert=True)
+
+
+@bot_app.on_callback_query(filters.regex("^contact_click_track$"))
+async def handle_contact_click(client, callback_query):
+    user_id = callback_query.from_user.id
+    first_name = callback_query.from_user.first_name or "Foydalanuvchi"
+    
+    # Stats ga yozish
+    stats = load_stats()
+    stats["contact_clicks"] = stats.get("contact_clicks", 0) + 1
+    save_stats(stats)
+    
+    # Foydalanuvchini adminga yo'naltirish
+    await callback_query.message.edit_text(
+        f"✅ **Admin bilan bog'lanish uchun quyidagi havolani bosing:**\n\n"
+        f"👉 [Admin bilan yozishing](tg://user?id={SECOND_ADMIN_ID})\n\n"
+        f"Yoki to'g'ridan-to'g'ri yozing.",
+    )
+    await callback_query.answer()
+    
+    # Ikkala adminga xabar yuborish
+    admins_list = load_admins()
+    for admin_id in list(set(admins_list)):
+        try:
+            await bot_app.send_message(
+                admin_id,
+                f"📞 **Bog'lanish so'rovi!**\n\n"
+                f"👤 [{first_name}](tg://user?id={user_id}) (ID: `{user_id}`) "
+                f"admin bilan bog'lanish tugmasini bosdi.\n\n"
+                f"Ehtimol Stars orqali to'lashda muammoga duch kelgan."
+            )
+        except:
+            pass
+
+@bot_app.on_callback_query(filters.regex("^sub_(approve|reject):"))
+async def handle_sub_approval(client, callback_query):
+    data_parts = callback_query.data.split(":")
+    action = data_parts[0].split("_")[1] # approve or reject
+    user_id_str = data_parts[1]
+    user_id = int(user_id_str)
+    
+    pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
+    try:
+        with open(pendings_file, "r") as f:
+            pendings = json.load(f)
+    except:
+        await callback_query.answer("❌ Ma'lumot topilmadi.", show_alert=True)
+        return
+        
+    if user_id_str not in pendings:
+        await callback_query.answer("❌ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
+        return
+        
+    pending_info = pendings.pop(user_id_str)
+    with open(pendings_file, "w") as f:
+        json.dump(pendings, f, indent=4)
+        
+    if action == "approve":
+        # Grant sub
+        subs = load_subscriptions()
+        expiry = time.time() + (SUBSCRIPTION_DAYS * 86400)
+        subs[user_id_str] = {
+            "expiry": expiry,
+            "warned": False
+        }
+        save_subscriptions(subs)
+        
+        # Stats
+        stats = load_stats()
+        stats["total_income"] = stats.get("total_income", 0) + pending_info["amount"]
+        if "payments" not in stats:
+            stats["payments"] = []
+        stats["payments"].append({
+            "user_id": user_id,
+            "amount": pending_info["amount"],
+            "time": time.time()
+        })
+        save_stats(stats)
+        
+        try:
+            await bot_app.send_message(
+                user_id,
+                "✅ **Admin tasdiqladi, botdan bemalol foydalanishingiz mumkin!**\n\nBoshlash uchun /start bosing."
+            )
+        except:
+            pass
+            
+        await callback_query.message.edit_text(f"✅ {pending_info['first_name']} (ID: `{user_id}`) tasdiqlandi va ruxsat berildi.")
+        
+    elif action == "reject":
+        charge_id = pending_info["charge_id"]
+        url = f"https://api.telegram.org/bot{config['BOT_TOKEN']}/refundStarPayment"
+        try:
+            requests.post(url, json={"user_id": user_id, "telegram_payment_charge_id": charge_id})
+        except Exception as e:
+            print("Refund req error:", e)
+            
+        try:
+            await bot_app.send_message(
+                user_id,
+                "❌ Xatolik: tolov qaytarildi."
+            )
+        except:
+            pass
+            
+        await callback_query.message.edit_text(f"❌ {pending_info['first_name']} (ID: `{user_id}`) rad etildi. To'lov qaytarildi.")
+
+
+# ================= HANDLERLAR =================
+@bot_app.on_message(filters.command(["utag", "atag", "tagall"], prefixes=["/", ".", "!"]) & filters.group)
+async def group_utag_command(client, message):
+    user_id = message.from_user.id
+    if not is_user_logged_in(user_id):
         return
 
-    print(f"{_CYAN}\n  🔄 Yangi session bilan ulanilmoqda...{_RESET}\n")
-    new_app = Client("vento_userbot_v2", api_id=api_id, api_hash=api_hash, workdir=USERBOT_SESSION_DIR)
+    ok, current = acquire_task(user_id, "utag")
+    if not ok:
+        await message.reply_text(f"⚠️ Sizda hozir **{current}** vazifasi ishlayapti. Tugashini kuting.")
+        return
+
+    text = message.text.split(maxsplit=1)[1] if len(message.command) > 1 else ""
+    stop_flags[user_id] = False
+    
+    await message.reply_text("✅ U-Tag boshlandi! To'xtatish uchun: `.stop` yozing.")
+    chat_identifier = message.chat.username if message.chat.username else message.chat.id
+    asyncio.create_task(utag_task(user_id, chat_identifier, text))
+
+@bot_app.on_message(filters.command(["stop", "stop_utag", "cancel_task"], prefixes=["/", ".", "!"]))
+async def global_stop_command(client, message):
+    user_id = message.from_user.id
+    if get_active_task(user_id):
+        stop_flags[user_id] = True
+        await message.reply_text("🛑 Vazifa to'xtatilmoqda...")
+    else:
+        await message.reply_text("Hech qanday faol vazifa topilmadi.")
+
+@bot_app.on_message(filters.command("help", prefixes=["/", "."]) & filters.private)
+async def help_command(client, message):
+    """Barcha mavjud buyruqlar ro'yxatini chiroyli ko'rsatadi"""
+    user_id = message.from_user.id
+
+    text = (
+        "╔══════════════════════════════╗\n"
+        "   📖  **VENTO — Yordam Menyusi**\n"
+        "╚══════════════════════════════╝\n\n"
+        
+        "━━━━━ 🔐 **Tizim** ━━━━━\n\n"
+        
+        "▸ `/start`\n"
+        "  Botni ishga tushiradi va login jarayonini boshlaydi\n\n"
+        
+        "▸ `/help` yoki `.help`\n"
+        "  Barcha buyruqlar va ularning vazifalari haqida ma'lumot\n\n"
+        
+        "▸ `/logout`\n"
+        "  Tizimdan chiqadi, sessiya va bazani o'chiradi\n\n"
+        
+        "▸ `/cancel`\n"
+        "  Joriy amalni bekor qiladi va asosiy menyuga qaytaradi\n\n"
+        
+        "━━━━━ 🚀 **Asosiy Xizmatlar** ━━━━━\n\n"
+        
+        "▸ **🚀 Scraper**\n"
+        "  Guruhdan userlarni yig'adi (username bo'yicha).\n"
+        "  4 xil filtr: Avtomatik, Xabarlar orqali, Qizlar, Adminlar\n\n"
+        
+        "▸ **📨 Xabar yuborish**\n"
+        "  Bazadagi userlarga ommaviy DM xabar yuboradi.\n"
+        "  Sonini tanlash yoki barchasiga yuborish mumkin\n\n"
+        
+        "▸ **🔍 Guruh Qidirish**\n"
+        "  Kalit so'z bo'yicha Telegram global qidiruvidan\n"
+        "  ochiq guruhlarni topadi\n\n"
+        
+        "▸ **📁 Yig'ilgan userlar**\n"
+        "  Bazangizdagi barcha userlarni ko'rsatadi.\n"
+        "  Yangi user qo'shish yoki bazani tozalash mumkin\n\n"
+        
+        "▸ **🎯 U-Tag**\n"
+        "  Guruh a'zolarini mention qilib tag qiladi.\n"
+        "  Menyu orqali yoki guruhda `.utag` buyrug'i bilan ishlatiladi\n\n"
+        
+        "━━━━━ ⚡ **Guruh Buyruqlari** ━━━━━\n\n"
+        
+        "▸ `.utag [matn]` yoki `.tagall [matn]`\n"
+        "  Guruhda to'g'ridan-to'g'ri barcha a'zolarni tag qiladi\n\n"
+        
+        "▸ `.stop`\n"
+        "  Istalgan faol vazifani (scraper, broadcast, utag) to'xtatadi\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **Maslahat:** Barcha xizmatlardan foydalanish uchun\n"
+        "avval `/start` orqali tizimga kiring.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await message.reply_text(text, reply_markup=main_menu())
+
+@bot_app.on_message(filters.command("start") & filters.private)
+async def start_command(client, message):
+    user_id = message.from_user.id
+
+    # Offline check
+    global bot_offline
+    if bot_offline:
+        return  # Offline bo'lsa, hech narsa qilmaymiz
+
+    # Login check
+    if not is_user_logged_in(user_id):
+        user_states[user_id] = "wait_terms_agree"
+        terms_text = (
+            "📜 **Foydalanish shartlari va Maxfiylik Siyosati (Privacy Policy)**\n\n"
+            "Empire Bot xizmatlaridan foydalanish orqali siz quyidagilarga rozi bo'lasiz:\n"
+            "1️⃣ Bot orqali jo'natilgan xabarlar, spam yoki boshqa harakatlar uchun foydalanuvchining shaxsan o'zi javobgar.\n"
+            "2️⃣ Bot faqatgina vositachi hisoblanadi. Telegram tomonidan profilingizga tushadigan har qanday cheklov (ban/spam) uchun ma'muriyat javobgar emas.\n"
+            "3️⃣ Xavfsizligingizni ta'minlash maqsadida bot orqali kirgan akkauntingiz barcha ma'lumotlari shifrlangan tarzda faqat ushbu serverda saqlanadi.\n\n"
+            "Iltimos, botdan foydalanishni davom ettirish uchun shartlarga rozi ekanligingizni tasdiqlang."
+        )
+        from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
+        markup = ReplyKeyboardMarkup([
+            [KeyboardButton("✅ Shartlarni qabul qilaman")]
+        ], resize_keyboard=True)
+        await message.reply_text(terms_text, reply_markup=markup)
+        return
+
+    # Subscription check
+    if not is_subscribed(user_id):
+        await client.send_invoice(
+            chat_id=user_id,
+            title="Premium Obuna",
+            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
+            payload="monthly_sub",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
+        )
+        await client.send_message(
+            chat_id=user_id,
+            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
+            ])
+        )
+        return
+
+    user_states[user_id] = "menu"
+    first_name = message.from_user.first_name or "Mijoz"
+
+    text = (
+        f"👋 Assalomu alaykum, {first_name}!\n\n"
+        "🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
+        "📌 **Mavjud xizmatlar:**\n"
+        "• 🚀 Scraper — guruhlardan user yig'ish\n"
+        "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+        "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+        "• U-Tag - guruhdagilarni chaqirish uchun\n"
+        "Quyidagi tugmalardan birini tanlang:"
+    )
+    await message.reply_text(text, reply_markup=main_menu())
+
+
+@bot_app.on_message(filters.command("profile") & filters.private)
+async def profile_command(client, message):
+    """Foydalanuvchi profil ma'lumotlarini ko'rsatadi"""
+    user_id = message.from_user.id
+    first_name = message.from_user.first_name or "Noma'lum"
+    username = message.from_user.username or "Yo'q"
+    
+    # Admin status
+    admin_status = "❌ Foydalanuvchi"
+    if is_super_admin(user_id):
+        admin_status = "👑 Bosh Admin"
+    elif is_second_admin(user_id):
+        admin_status = "⭐ Ikkinchi Admin"
+    elif is_admin(user_id):
+        admin_status = "🛡️ Admin"
+    
+    # Subscription status
+    sub_status = "❌ Obunaga ega emas"
+    sub_joined_date = "—"
+    if is_subscribed(user_id):
+        if is_admin(user_id) or is_super_admin(user_id) or is_second_admin(user_id):
+            sub_status = "✅ Cheksiz (Admin)"
+        else:
+            subs = load_subscriptions()
+            str_id = str(user_id)
+            if str_id in subs:
+                expiry = subs[str_id].get("expiry", 0)
+                joined = subs[str_id].get("joined", 0)
+                remaining_days = int((expiry - time.time()) / 86400)
+                if remaining_days > 0:
+                    sub_status = f"✅ Obunaga ega ({remaining_days} kun qoldi)"
+                else:
+                    sub_status = "⚠️ Obuna muddati tugagan"
+                if joined > 0:
+                    sub_joined_date = datetime.fromtimestamp(joined).strftime("%d.%m.%Y")
+    
+    # VIP status
+    vip_status = "❌ VIP emas"
+    vip_joined_date = "—"
+    VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+    if os.path.exists(VIP_FILE):
+        try:
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                vips = json.load(f)
+                if isinstance(vips, dict):
+                    str_id = str(user_id)
+                    if str_id in vips:
+                        vip_data = vips[str_id]
+                        if isinstance(vip_data, dict) and vip_data.get("expiry"):
+                            expiry = vip_data["expiry"]
+                            joined = vip_data.get("joined", 0)
+                            if time.time() > expiry:
+                                vip_status = "⚠️ VIP muddati tugagan"
+                            else:
+                                remaining_days = int((expiry - time.time()) / 86400)
+                                vip_status = f"💎 VIP ({remaining_days} kun qoldi)"
+                            if joined > 0:
+                                vip_joined_date = datetime.fromtimestamp(joined).strftime("%d.%m.%Y")
+                        else:
+                            vip_status = "💎 VIP (Cheksiz)"
+                elif isinstance(vips, list):
+                    if user_id in vips:
+                        vip_status = "💎 VIP (Cheksiz)"
+        except:
+            pass
+    
+    # Database count
+    databases = get_all_databases(user_id)
+    db_count = len(databases)
+    total_users = sum(len(db.get("users", [])) for db in databases.values())
+    
+    # Login status
+    login_status = "✅ Login qilgan" if is_user_logged_in(user_id) else "❌ Login qilmagan"
+    
+    # User join date (first time using bot)
+    USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
+    user_joined_date = "—"
+    if os.path.exists(USER_DATA_FILE):
+        try:
+            with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
+                user_data = json.load(f)
+                str_id = str(user_id)
+                if str_id in user_data:
+                    joined = user_data[str_id].get("joined", 0)
+                    if joined > 0:
+                        user_joined_date = datetime.fromtimestamp(joined).strftime("%d.%m.%Y")
+        except:
+            pass
+    
+    text = (
+        f"👤 **Profil Ma'lumotlari**\n\n"
+        f"🆔 **User ID:** `{user_id}`\n"
+        f"👤 **Ism:** {first_name}\n"
+        f"🔖 **Username:** @{username}\n"
+        f"🛡️ **Status:** {admin_status}\n"
+        f"📅 **Obuna:** {sub_status}\n"
+        f"📆 **Obuna qo'shilgan:** {sub_joined_date}\n"
+        f"💎 **VIP:** {vip_status}\n"
+        f"📆 **VIP qo'shilgan:** {vip_joined_date}\n"
+        f"🔐 **Login:** {login_status}\n"
+        f"📆 **Botga qo'shilgan:** {user_joined_date}\n"
+        f"💾 **Bazalar:** {db_count} ta\n"
+        f"👥 **Jami userlar:** {total_users} ta\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    # Yordam tugmasi bilan inline keyboard - admin username orqali
     try:
-        new_app.run()
-    except KeyboardInterrupt:
-        print(f"{_YELLOW}\n  ⏹  Bot to'xtatildi.{_RESET}")
+        admin_user = await client.get_users(SUPER_ADMIN_ID)
+        admin_username = admin_user.username if admin_user.username else str(SUPER_ADMIN_ID)
+        help_url = f"https://t.me/{admin_username}"
+    except:
+        help_url = f"https://t.me/{SUPER_ADMIN_ID}"
+    
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❓ Yordam", url=help_url)]
+    ])
+    
+    await message.reply_text(text, reply_markup=markup)
+
+
+@bot_app.on_message(filters.command("cancel") & filters.private)
+async def cancel_command(client, message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id)
+
+    if state in [
+        "login_phone",
+        "login_code",
+        "login_password",
+        "login_upload",
+    ]:
+        # Login jarayonini bekor qilish
+        if user_id in login_data:
+            try:
+                # Clientni tozalash
+                data = login_data[user_id]
+                if "client" in data and data["client"].is_connected:
+                    await data["client"].disconnect()
+            except:
+                pass
+            del login_data[user_id]
+
+        user_states.pop(user_id, None)
+        from pyrogram.types import ReplyKeyboardRemove
+        await message.reply_text("❌ Login bekor qilindi.\n\nQayta boshlash uchun /start ni bosing.", reply_markup=ReplyKeyboardRemove())
+    elif state and state != "menu":
+        user_states[user_id] = "menu"
+        await message.reply_text(
+            "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
+        )
+    else:
+        await message.reply_text(
+            "Hech narsa bekor qilinmadi.", reply_markup=main_menu()
+        )
+
+
+@bot_app.on_message(filters.command("logout") & filters.private)
+async def logout_command(client, message):
+    user_id = message.from_user.id
+    if not is_user_logged_in(user_id):
+        await message.reply_text("❌ Siz hali tizimga kirmagansiz.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Ha, chiqish", callback_data="confirm_logout"),
+                InlineKeyboardButton("❌ Yo'q, qolish", callback_data="cancel_logout"),
+            ]
+        ]
+    )
+    await message.reply_text(
+        "⚠️ **Diqqat!**\n\nTizimdan chiqsangiz barcha yig'ilgan bazangiz (userlar) va sessiyangiz o'chib ketadi. "
+        "Qaytadan telefon raqam orqali kirishingiz kerak bo'ladi.\n\nRostdan ham chiqmoqchimisiz?",
+        reply_markup=keyboard,
+    )
+
+
+@bot_app.on_callback_query(filters.regex("^(confirm_logout|cancel_logout)$"))
+async def logout_callback(client, callback):
+    user_id = callback.from_user.id
+
+    if callback.data == "cancel_logout":
+        await callback.message.edit_text("❌ Tizimdan chiqish bekor qilindi.")
+        return
+
+    if callback.data == "confirm_logout":
+        await callback.answer("Ma'lumotlar o'chirilmoqda...")
+
+        # Sessiyani o'chirish
+        session_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+
+        with clients_lock:
+            user_client = user_clients.get(user_id)
+
+        if user_client:
+            try:
+                if user_client.is_connected:
+                    await user_client.disconnect()
+            except:
+                pass
+            with clients_lock:
+                if user_id in user_clients:
+                    del user_clients[user_id]
+
+        if os.path.exists(session_path):
+            try:
+                os.remove(session_path)
+            except Exception as e:
+                print(f"Error removing session {user_id}: {e}")
+
+        # Bazani tozalash
+        clear_user_database(user_id)
+
+        # Holatlarni tozalash
+        logged_in_users.discard(user_id)
+        user_states.pop(user_id, None)
+
+        text = (
+            "✅ **Tizimdan muvaffaqiyatli chiqdingiz va barcha ma'lumotlaringiz o'chirildi.**\n\n"
+            "Qayta kirish uchun /start ni bosing."
+        )
+        await callback.message.edit_text(text)
+
+
+@bot_app.on_message(filters.command("shutdown") & filters.private)
+async def shutdown_command(client, message):
+    """Botni offline qiladi (faqat ikkinchi admin uchun)"""
+    user_id = message.from_user.id
+
+    if not (is_second_admin(user_id) or is_super_admin(user_id)):
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+
+    global bot_offline
+    bot_offline = True
+    await message.reply_text(
+        "🔴 **Bot offline holatiga o'tdi.**\n\nEndi hech qanday buyruqga javob bermaydi.\nOnline qilish uchun: `/power`"
+    )
+
+
+@bot_app.on_message(filters.command("power") & filters.private)
+async def power_command(client, message):
+    """Botni online qiladi (faqat ikkinchi admin uchun)"""
+    user_id = message.from_user.id
+
+    if not (is_second_admin(user_id) or is_super_admin(user_id)):
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+
+    global bot_offline
+    bot_offline = False
+    await message.reply_text(
+        "🟢 **Bot online holatiga o'tdi.**\n\nEndi barcha buyruqlarga javob berada."
+    )
+
+
+@bot_app.on_message(filters.command("admins") & filters.private)
+async def admins_command(client, message):
+    """Adminlar ro'yxatini ko'rsatadi (faqat bosh admin uchun)"""
+    user_id = message.from_user.id
+
+    # Faqat bosh admin ko'ra oladi
+    if not is_super_admin(user_id):
+        return  # Bosh admin bo'lmasa, hech narsa qilmaymiz (buyruq mavjud emasdek)
+
+    if not ADMIN_IDS:
+        await message.reply_text("❌ Hozircha adminlar yo'q.")
+        return
+
+    # Bosh admin uchun barcha adminlarni ko'rsatadi
+    text = f"👑 **Adminlar ro'yxati:**\n\n"
+
+    for admin_id in ADMIN_IDS:
+        if admin_id == SUPER_ADMIN_ID:
+            text += f"• {admin_id} - Bosh Admin (Siz)\n"
+        else:
+            text += f"• {admin_id} - Admin\n"
+
+    text += f"\n• Jami: {len(ADMIN_IDS)} ta admin"
+
+    await message.reply_text(text)
+
+
+@bot_app.on_message(filters.command("dashboard") & filters.private)
+async def dashboard_command(client, message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.reply_text("❌ Sizda bu buyruqni ishlatish uchun huquq yo'q.")
+        return
+        
+    subs = load_subscriptions()
+    stats = load_stats()
+    
+    try:
+        total_users = len([f for f in os.listdir(SESSIONS_DIR) if f.endswith(".session")])
+    except:
+        total_users = 0
+        
+    active_subs = len(subs)
+    expired_subs = stats.get("expired_subs", 0)
+    total_income = stats.get("total_income", 0)
+    
+    today_start = time.mktime(time.strptime(time.strftime("%Y-%m-%d 00:00:00"), "%Y-%m-%d %H:%M:%S"))
+    today_payments = 0
+    today_income = 0
+    
+    for p in stats.get("payments", []):
+        if p.get("time", 0) >= today_start:
+            today_payments += 1
+            today_income += p.get("amount", 0)
+            
+    contact_clicks = stats.get("contact_clicks", 0)
+    
+    text = (
+        "📊 **BOT DASHBOARD (Statistika)**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👥 **Foydalanuvchilar:**\n"
+        f"👤 Jami ro'yxatdan o'tganlar: **{total_users}** ta\n"
+        f"🟢 Faol obunachilar: **{active_subs}** ta\n"
+        f"🔴 Muddati tugagan obunalar: **{expired_subs}** ta\n\n"
+        "💰 **Moliya (Telegram Stars ⭐️):**\n"
+        f"💵 Barcha vaqtdagi daromad: **{total_income}** ⭐️\n"
+        f"📅 Bugungi to'lovlar soni: **{today_payments}** ta\n"
+        f"📈 Bugungi tushum: **{today_income}** ⭐️\n\n"
+        "📞 **Bog'lanishlar:**\n"
+        f"💬 Admin bilan bog'lanish tanlagan: **{contact_clicks}** ta\n\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    await message.reply_text(text)
+
+
+# Login flow handlers
+async def handle_login_upload(client, message, user_id):
+    """Session faylini qabul qilish"""
+    if message.document:
+        try:
+            # Faylni yuklab olish
+            file = message.document
+            file_path = await client.download_media(
+                file, file_name=f"sessions/user_{user_id}.session"
+            )
+
+            # Faylni SESSIONS_DIR ga ko'chirish
+            final_path = os.path.join(SESSIONS_DIR, f"user_{user_id}.session")
+            shutil.move(file_path, final_path)
+
+            # Client yaratish va tekshirish
+            session_name = os.path.join("data", "sessions", f"user_{user_id}")
+            user_client = Client(
+                session_name,
+                api_id=config["API_ID"],
+                api_hash=config["API_HASH"],
+                workdir=BASE_DIR,
+            )
+
+            # Clientni connect qilish
+            await user_client.connect()
+
+            # Tekshirish - bot emasligini
+            me = await user_client.get_me()
+            if me.is_bot:
+                await message.reply_text(
+                    "❌ Bu bot session fayli. User session faylini yuboring."
+                )
+                os.remove(final_path)
+                return
+
+            # Muvaffaqiyatli
+            with clients_lock:
+                user_clients[user_id] = user_client
+
+            if user_id in login_data:
+                del login_data[user_id]
+            user_states[user_id] = "menu"
+            logged_in_users.add(user_id)  # Logged in qilish
+
+            first_name = message.from_user.first_name or "Mijoz"
+            await message.reply_text(
+                f"✅ **Muvaffaqiyatli ulandi!**\n\n"
+                f"👋 Assalomu alaykum, {first_name}!\n\n"
+                "🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
+                "📌 **Mavjud xizmatlar:**\n"
+                "• 🚀 Scraper — guruhlardan user yig'ish\n"
+                "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+                "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+                "Quyidagi tugmalardan birini tanlang:",
+                reply_markup=main_menu(),
+            )
+        except Exception as e:
+            await message.reply_text(
+                f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring."
+            )
+    else:
+        await message.reply_text("❌ Iltimos, session faylini yuboring.")
+
+
+# API_ID/API_HASH handlers
+async def handle_login_api_id(client, message, user_id, text):
+    """API_ID ni qabul qilish"""
+    try:
+        api_id = int(text.strip())
+        if api_id <= 0:
+            await message.reply_text("❌ API_ID musbat son bo'lishi kerak.")
+            return False
+
+        login_data[user_id] = {"api_id": api_id}
+        user_states[user_id] = "login_api_hash"
+        await message.reply_text(
+            f"✅ API_ID qabul qilindi: `{api_id}`\n\n"
+            f"🔑 **API_HASH ni kiriting:**\n"
+            f"my.telegram.org dan olingan API_HASH ni yuboring.",
+            reply_markup=api_hash_guide_keyboard(),
+        )
+        return True
+    except ValueError:
+        await message.reply_text("❌ API_ID raqam bo'lishi kerak. Masalan: `12345678`")
+        return False
+
+
+async def handle_login_api_hash(client, message, user_id, text):
+    """API_HASH ni qabul qilish"""
+    if user_id not in login_data:
+        await message.reply_text("❌ Avval API_ID kiriting.")
+        return False
+
+    api_hash = text.strip()
+    if len(api_hash) < 10:
+        await message.reply_text("❌ API_HASH noto'g'ri ko'rinadi.")
+        return False
+
+    login_data[user_id]["api_hash"] = api_hash
+    user_states[user_id] = "login_phone"
+    await message.reply_text(
+        f"✅ API_HASH qabul qilindi.\n\n"
+        f"📱 **Telefon raqamingizni kiriting:**\n"
+        f"Masalan: `+998901234567` yoki `998901234567`\n\n"
+        f"📂 **Yoki session fayl yuboring:**\n"
+        f"Agar oldin session yaratgan bo'lsangiz, .session faylini yuborishingiz mumkin."
+    )
+    return True
+
+
+# Telefon raqam formatini tekshirish
+def validate_phone_number(phone: str) -> str:
+    """Telefon raqamni tozalash va tekshirish"""
+    # Barcha bo'sh joylar, qavslar va chiziqlarni olib tashlash
+    cleaned = re.sub(r"[\s\(\)\-\.]", "", phone)
+
+    # Faqat raqamlar qolganini tekshirish uchun + ni vaqtincha olib turish
+    num_only = cleaned[1:] if cleaned.startswith("+") else cleaned
+
+    # Faqat raqamlar qolganini tekshirish
+    if not num_only.isdigit():
+        return None
+
+    # Uzunligini tekshirish (7-15 raqam)
+    if len(num_only) < 7 or len(num_only) > 15:
+        return None
+
+    return "+" + num_only
+
+
+async def handle_login_phone(client, message, user_id, phone_text):
+    """Telefon raqamni qabul qilish va kod yuborish"""
+    phone = validate_phone_number(phone_text)
+
+    if not phone:
+        await message.reply_text(
+            "❌ **Noto'g'ri telefon raqam!**\n\n"
+            "Iltimos, to'g'ri formatda kiriting:\n"
+            "Masalan: `+998901234567` yoki `998901234567`"
+        )
+        return False
+
+    try:
+        # User uchun client yaratish
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
+
+        user_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+
+        # Clientni ulash
+        await user_client.connect()
+
+        # Kod yuborish
+        sent_code = await user_client.send_code(phone)
+
+        # Ma'lumotlarni saqlash
+        login_data[user_id] = {
+            "api_id": config["API_ID"],
+            "api_hash": config["API_HASH"],
+            "phone": phone,
+            "phone_code_hash": sent_code.phone_code_hash,
+            "client": user_client,
+        }
+
+        # Keyingi holatga o'tish
+        user_states[user_id] = "login_code"
+        print(f"🔑 User {user_id} state changed to login_code")
+
+        await message.reply_text(
+            f"✅ **Kod yuborildi!**\n\n"
+            f"📱 Raqam: `{phone}`\n\n"
+            f"🔢 Telegramdan kelgan kodni kiriting.\n\n"
+            f"💡 Masalan: `1 2 3 4 5` (Orasiga 1 probel qo'yin yozing)"
+        )
+        return True
+
+    except FloodWait as e:
+        await message.reply_text(f"⏳ Juda ko'p urinishlar. {e.value} soniya kuting.")
+        return False
     except Exception as e:
-        print(f"{_RED}\n  ❌ {e}{_RESET}")
-        raise
+        print(f"❌ Error in handle_login_phone: {e}")
+        await message.reply_text(f"❌ Xatolik: {str(e)}")
+        return False
+
+
+async def handle_login_code(client, message, user_id, code_text):
+    """Kodni qabul qilish va login qilish"""
+    if user_id not in login_data:
+        await message.reply_text("❌ Avval telefon raqamni kiriting.")
+        return False
+
+    try:
+        # Probel, chiziqcha va nuqtalarni olib tashlash
+        code = re.sub(r"[\s\-\.]", "", code_text)
+        if not code.isdigit():
+            await message.reply_text(
+                "❌ Kod faqat raqamlardan iborat bo'lishi kerak. Masalan: `1 2 3 4 5`"
+            )
+            return False
+
+        data = login_data[user_id]
+        phone = data["phone"]
+        phone_code_hash = data["phone_code_hash"]
+        user_client = data["client"]
+
+        # Kod bilan login qilish
+        try:
+            await user_client.sign_in(phone, phone_code_hash, code)
+        except Exception as e:
+            error_str = str(e)
+            if (
+                "SESSION_PASSWORD_NEEDED" in error_str
+                or "2FA" in error_str.lower()
+                or "two-factor" in error_str.lower()
+            ):
+                # 2FA parol kerak
+                user_states[user_id] = "login_password"
+                await message.reply_text(
+                    "🔐 **2FA parol kerak**\n\n"
+                    "Ikkita faktorli himoya parolini kiriting:\n\n"
+                    "❌ Bekor qilish uchun: /cancel"
+                )
+                return True
+            else:
+                raise e
+
+        # Muvaffaqiyatli login!
+        await user_client.disconnect()
+
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
+
+        # Clientni qaytadan yaratish va saqlash
+        user_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+
+        with clients_lock:
+            user_clients[user_id] = user_client
+
+        # Tozalash
+        if user_id in login_data:
+            del login_data[user_id]
+
+        user_states[user_id] = "menu"
+        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
+
+        first_name = message.from_user.first_name or "Mijoz"
+        await message.reply_text(
+            f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
+            f"📌 **Mavjud xizmatlar:**\n"
+            f"• 🚀 Scraper — guruhlardan user yig'ish\n"
+            f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            f"• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            f"Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu(),
+        )
+        return True
+
+    except Exception as e:
+        await message.reply_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.")
+        return False
+
+
+async def handle_login_password(client, message, user_id, password_text):
+    """2FA parolni qabul qilish"""
+    if user_id not in login_data:
+        await message.reply_text("❌ Avval telefon raqamni kiriting.")
+        return False
+
+    try:
+        data = login_data[user_id]
+        phone = data["phone"]
+        phone_code_hash = data["phone_code_hash"]
+        user_client = data["client"]
+
+        # Parol bilan login qilish (Pyrogram v2: check_password())
+        await user_client.check_password(password_text)
+
+        # Muvaffaqiyatli login!
+        await user_client.disconnect()
+
+        session_name = os.path.join("data", "sessions", f"user_{user_id}")
+
+        # Clientni qaytadan yaratish va saqlash
+        user_client = Client(
+            session_name,
+            api_id=config["API_ID"],
+            api_hash=config["API_HASH"],
+            workdir=BASE_DIR,
+        )
+
+        with clients_lock:
+            user_clients[user_id] = user_client
+
+        # Tozalash
+        if user_id in login_data:
+            del login_data[user_id]
+
+        user_states[user_id] = "menu"
+        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
+
+        first_name = message.from_user.first_name or "Mijoz"
+        await message.reply_text(
+            f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
+            f"👋 Assalomu alaykum, {first_name}!\n\n"
+            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
+            f"📌 **Mavjud xizmatlar:**\n"
+            f"• 🚀 Scraper — guruhlardan user yig'ish\n"
+            f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+            f"• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+            f"Quyidagi tugmalardan birini tanlang:",
+            reply_markup=main_menu(),
+        )
+        return True
+
+    except Exception as e:
+        await message.reply_text(
+            f"❌ Noto'g'ri parol: {str(e)}\n\nQaytadan urinib ko'ring."
+        )
+        return False
+
+
+@bot_app.on_message(
+    filters.private
+    & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help", "add_admin", "del_admin", "add_vip", "del_vip", "add_member", "del_member", "dashboard", "profile"])
+)
+async def process_messages(client, message):
+    from pyrogram.types import ReplyKeyboardRemove
+
+    user_id = message.from_user.id
+    text = message.text
+    if message.contact:
+        text = message.contact.phone_number
+
+    if not text:
+        return
+
+    # Debug logging
+    state = user_states.get(user_id)
+    print(f"📨 User {user_id} sent: '{text}', current state: {state}")
+
+    if text in ["❌ Bekor qilish", "/cancel"]:
+        user_states.pop(user_id, None)
+        await message.reply_text("❌ Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat login flow state'da bo'lsa mumkin)
+    if not is_user_logged_in(user_id) and state not in [
+        "wait_terms_agree",
+        "login_phone",
+        "login_code",
+        "login_password",
+        "login_upload",
+    ]:
+        await message.reply_text(
+            "❌ Xatolik: Siz avval tizimga kirishingiz kerak. /start ni bosing.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    # Subscription check
+    if state not in [
+        "wait_terms_agree",
+        "login_phone",
+        "login_code",
+        "login_password",
+        "login_upload",
+    ] and not is_subscribed(user_id):
+        await client.send_invoice(
+            chat_id=user_id,
+            title="Premium Obuna",
+            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
+            payload="monthly_sub",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
+        )
+        await client.send_message(
+            chat_id=user_id,
+            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
+            ])
+        )
+        return
+    # Login flow - Shartlarga rozi bo'lish
+    if state == "wait_terms_agree":
+        if text == "✅ Shartlarni qabul qilaman":
+            user_states[user_id] = "login_phone"
+            from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
+            markup = ReplyKeyboardMarkup([
+                [KeyboardButton("📞 Telefon raqamini yuborish", request_contact=True)],
+                [KeyboardButton("❌ Bekor qilish")]
+            ], resize_keyboard=True)
+            
+            await message.reply_text(
+                "🔌 **Sessiya ulash jarayoni boshlandi.**\n\n"
+                "Iltimos, Telegram akkauntingiz telefon raqamini kiriting (masalan: `+998901234567` formatida) "
+                "yoki pastdagi tugma orqali yuboring:",
+                reply_markup=markup
+            )
+        else:
+            await message.reply_text("Iltimos, pastdagi tugma orqali shartlarga rozi bo'ling.")
+        return
+
+    # Login flow - session fayl yuborilganda
+    if state == "login_upload":
+        if message.document:
+            await handle_login_upload(client, message, user_id)
+        else:
+            await message.reply_text("❌ Iltimos, session faylini yuboring.")
+        return
+
+    # Login flow - telefon raqam kiritilganda
+    if state == "login_phone":
+        # Agar session fayl yuborilgan bo'lsa
+        if message.document:
+            await handle_login_upload(client, message, user_id)
+            return
+        # Telefon raqamni qabul qilish
+        await handle_login_phone(client, message, user_id, text)
+        return
+
+    # Login flow - kod kiritilganda
+    if state == "login_code":
+        print(f"🔑 Processing code for user {user_id}")
+        await handle_login_code(client, message, user_id, text)
+        return
+
+    # Login flow - 2FA parol kiritilganda
+    if state == "login_password":
+        await handle_login_password(client, message, user_id, text)
+        return
+
+    # Offline check - admin buyruqlaridan tashqari barchasini ignore qiladi
+    global bot_offline
+    if bot_offline:
+        # Faqat adminlar /power buyruqini ishlatishi mumkin
+        if text == "/power" and is_admin(user_id):
+            # Bu buyruq alohida handlerda ishlaydi
+            pass
+        else:
+            return  # Offline bo'lsa, barcha xabarlarni ignore qiladi
+
+    # Flood protection check
+    flood_message, is_blocked = check_flood(user_id)
+    if flood_message:
+        await send_or_edit_message(client, user_id, flood_message)
+        if is_blocked:
+            return
+
+    if text in ["❌ Bekor qilish", "/cancel"]:
+        user_states[user_id] = "menu"
+        await send_or_edit_message(
+            client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
+        )
+        return
+
+    # Dublikat buyruq tekshiruvi — login va cancel bundan ozod
+    if is_duplicate_command(user_id, text):
+        await send_or_edit_message(
+            client,
+            user_id,
+            "⚠️ Bir xil tugmani ketma-ket bosmang. Biroz kuting.",
+            reply_markup=main_menu()
+            if user_states.get(user_id, "menu") == "menu"
+            else cancel_menu(),
+        )
+        return
+
+    state = user_states.get(user_id, "menu")
+
+    if text in MENU_BUTTONS:
+        if state != "menu":
+            await send_or_edit_message(
+                client,
+                user_id,
+                "⚠️ Avval joriy amalni tugating yoki `❌ Bekor qilish` bosing.",
+                reply_markup=cancel_menu(),
+            )
+            return
+        active = get_active_task(user_id)
+        if active:
+            await send_or_edit_message(
+                client, user_id, active_task_message(active), reply_markup=main_menu()
+            )
+            return
+
+    if text in DATABASE_BUTTONS:
+        if text == "➕ Yangi user(lar) qo'shish":
+            user_states[user_id] = "add_new_users_wait"
+            await send_or_edit_message(client, user_id,
+                "➕ **Yangi user(lar)ni kiriting:**\n"
+                "Usernamelarni probel, vergul yoki yangi qatordan ajratib yozavering.\n"
+                "Masalan: `@username1, @username2, @username3`",
+                reply_markup=cancel_menu(),
+            )
+            return
+        elif text == "🗑️ Bazani tozalash":
+            await send_or_edit_message(
+                client,
+                user_id,
+                "⚠️ **Diqqat!** Barcha yig'ilgan userlar o'chirib yuboriladi.\n"
+                "Rostdan ham tozalaysizmi?",
+                reply_markup=confirm_delete_menu(),
+            )
+            user_states[user_id] = "confirm_delete"
+            return
+        elif text == "🔙 Orqaga":
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "🏠 Asosiy menyuga qaytdingiz.",
+                reply_markup=main_menu(),
+            )
+            return
+        return
+
+    if state == "add_new_users_wait":
+        usernames = re.findall(r"@?([A-Za-z0-9_]{5,32})", text)
+        if not usernames:
+            await send_or_edit_message(
+                client, user_id, "❌ Hech qanday yaroqli username topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu()
+            )
+            return
+        
+        formatted_usernames = [f"@{u}" if not u.startswith("@") else u for u in usernames]
+        temp_add_users[user_id] = formatted_usernames
+        user_states[user_id] = "add_new_users_confirm"
+        
+        await send_or_edit_message(
+            client, user_id,
+            f"✅ **{len(formatted_usernames)}** ta username topildi.\n\n"
+            f"Shularni bazaga qo'shishni tasdiqlaysizmi?",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("✅ Ha, tasdiqlash"), KeyboardButton("❌ Yo'q, bekor qilish")]],
+                resize_keyboard=True
+            )
+        )
+        return
+
+    if state == "add_new_users_confirm":
+        if text == "✅ Ha, tasdiqlash":
+            users_to_add = temp_add_users.get(user_id, [])
+            if users_to_add:
+                # Add to a new DB called 'Qo'lda qo'shilganlar'
+                save_database(user_id, "Qo'lda qo'shilganlar", users_to_add)
+            
+            user_states[user_id] = "menu"
+            temp_add_users.pop(user_id, None)
+            
+            usernames = load_user_database(user_id)
+            await send_or_edit_message(
+                client, user_id,
+                f"✅ **{len(users_to_add)}** ta user bazaga qo'shildi!\n\n"
+                f"📁 Bazangizda jami **{len(usernames)}** ta user bor.",
+                reply_markup=database_menu(),
+            )
+            show_paginated_users(client, user_id, usernames)
+            
+        elif text == "❌ Yo'q, bekor qilish":
+            user_states[user_id] = "menu"
+            temp_add_users.pop(user_id, None)
+            usernames = load_user_database(user_id)
+            await send_or_edit_message(
+                client, user_id, "❌ Bekor qilindi.", reply_markup=database_menu()
+            )
+            show_paginated_users(client, user_id, usernames)
+        return
+
+    if state == "confirm_delete":
+        if text == "✅ Ha, tozalash":
+            clear_user_database(user_id)
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client, user_id, "🗑️ Baza tozalandi.", reply_markup=main_menu()
+            )
+        elif text == "❌ Bekor qilish":
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client, user_id, "Bekor qilindi.", reply_markup=main_menu()
+            )
+        return
+
+    # ----- ASOSIY MENYU -----
+    if state == "menu":
+        if text == "⚡ Super Scraper":
+            user_states[user_id] = "scrape_wait_group"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "🚀 **SCRAPER (Full Olish)**\n\n"
+                "Guruh manzilini yuboring:\n"
+                "• `@guruh_username`\n"
+                "• `https://t.me/guruh_username`\n"
+                "• Yopiq guruh: `https://t.me/+invite_kodi`\n\n"
+                "⚠️ Guruh **nomi** emas, **@username** yoki **havola** yuboring!\n"
+                "User akkauntingiz guruhda bo'lishi kerak.",
+                reply_markup=cancel_menu(),
+            )
+
+        elif text == "🌐 Global Qidiruv":
+            user_states[user_id] = "search_wait_keyword"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "🔍 **GURUH QIDIRISH**\n\nQaysi mavzuda guruh izlayapsiz? Kalit so'zni yozing:\n(Masalan: `biznes`, `kino`)",
+                reply_markup=cancel_menu(),
+            )
+
+        elif text == "📮 Smart Xabarnoma" or text == "Xabar yuborish":
+            dbs = get_all_databases(user_id)
+            if not dbs:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    "❌ Bazangizda userlar yo'q. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi menyudan o'zingiz qo'shing.",
+                    reply_markup=database_menu()
+                )
+                return
+            
+            text_msg = f"📨 **XABAR YUBORISH**\n\nQaysi bazadagi userlarga xabar yubormoqchisiz?\n\n"
+            for db_id, info in dbs.items():
+                title = info.get("title", "Noma'lum")
+                text_msg += f"🔹 **ID:** `{db_id}` | Guruh: _{title}_ | Qoldi: **{len(info.get('users', []))}**\n"
+            text_msg += "\nID raqamini yozing:"
+            
+            user_states[user_id] = "wait_db_id_broadcast"
+            await send_or_edit_message(
+                client,
+                user_id,
+                text_msg,
+                reply_markup=cancel_menu(),
+            )
+
+        elif text == "💾 Yig'ilgan Bazalar":
+            dbs = get_all_databases(user_id)
+            if dbs:
+                text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami guruhlar: **{len(dbs)}** ta\n\n"
+                for db_id, info in dbs.items():
+                    title = info.get("title", "Noma'lum")
+                    time_str = info.get("timestamp", "Noma'lum")
+                    text_msg += f"🔹 **ID:** `{db_id}`\n📝 Guruh: _{title}_\n👥 Qoldi: **{len(info.get('users', []))}** ta\n🕒 Vaqt: {time_str}\n\n"
+                
+                text_msg += "Tavsilotni olish uchun bazaning ID raqamini pastga yozing:"
+                user_states[user_id] = "wait_db_id_view"
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    text_msg,
+                    reply_markup=database_menu(),
+                )
+            else:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi tugma orqali o'zingiz qo'shing.",
+                    reply_markup=database_menu()
+                )
+        elif text == "🧠 Smart Yo'llanma":
+            user_states[user_id] = "utag_wait_group"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "🎯 **U-TAG**\n\n"
+                "Qaysi guruhda tag qilmoqchisiz?\n"
+                "Guruh manzilini yuboring:\n"
+                "• `@guruh_username`\n"
+                "• `https://t.me/guruh_username`\n\n"
+                "⚠️ Sizning user akkauntingiz o'sha guruhda bo'lishi kerak.",
+                reply_markup=cancel_menu(),
+            )
+            
+        elif text == "🛸 Shaxsiy Profil":
+            subs = load_subscriptions()
+            info = "Sizda obuna yo'q."
+            if is_admin(user_id):
+                info = "Siz Adminsiz! (Cheksiz muddat)"
+            elif str(user_id) in subs:
+                expiry = subs[str(user_id)].get("expiry", 0)
+                if expiry > time.time():
+                    import datetime
+                    exp_date = datetime.datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M')
+                    info = f"Obunangiz mavjud. Tugash vaqti: {exp_date}"
+            
+            dbs = get_all_databases(user_id)
+            total_users = sum(len(db.get("users", [])) for db in dbs.values())
+
+            await send_or_edit_message(
+                client,
+                user_id,
+                f"🛸 **Shaxsiy Profil**\n\n"
+                f"👤 **ID:** `{user_id}`\n"
+                f"👑 **Status:** {info}\n"
+                f"👥 **Yig'ilgan foydalanuvchilar:** {total_users} ta\n"
+                f"🗂 **Guruhlar bazasi:** {len(dbs)} ta",
+                reply_markup=main_menu(),
+            )
+            
+        elif text == "💎 Premium Tariflar":
+            await send_or_edit_message(
+                client,
+                user_id,
+                "💎 **Premium Tariflar**\n\n"
+                "• 1 Oylik obuna - **100 Stars** (yoki 26,000 UZS)\n\n"
+                "Bu tarifda siz quyidagi barcha imkoniyatlarga ega bo'lasiz:\n"
+                "✅ ⚡ Super Scraper (Limitsiz)\n"
+                "✅ 🧬 Avto-Inviter\n"
+                "✅ 📮 Smart Xabarnoma (Mass DM)\n"
+                "✅ 🧠 Smart Yo'llanma\n\n"
+                "To'lov qilish yoki murojaat uchun Admin bilan bog'laning.",
+                reply_markup=main_menu(),
+            )
+            
+        elif text == "🧬 Avto-Inviter":
+            dbs = get_all_databases(user_id)
+            if not dbs:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    "❌ Bazangizda userlar yo'q. Avval `⚡ Super Scraper` orqali user yig'ing.",
+                    reply_markup=database_menu()
+                )
+                return
+            
+            text_msg = f"🧬 **AVTO-INVITER**\n\nQaysi bazadagi userlarni guruhga qo'shmoqchisiz?\n\n"
+            for db_id, info in dbs.items():
+                title = info.get("title", "Noma'lum")
+                text_msg += f"🔹 **ID:** `{db_id}` | Guruh: _{title}_ | Qoldi: **{len(info.get('users', []))}**\n"
+            text_msg += "\nOdamlarni oladigan BAZA ID raqamini yozing:"
+            
+            user_states[user_id] = "wait_db_id_inviter"
+            await send_or_edit_message(
+                client,
+                user_id,
+                text_msg,
+                reply_markup=cancel_menu(),
+            )
+
+        else:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "Iltimos, tugmalardan birini tanlang.",
+                reply_markup=main_menu(),
+            )
+
+    
+    # ----- DATABASE SELECTION -----
+    elif state == "wait_db_id_broadcast":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
+            )
+            return
+            
+        db_id = text.strip()
+        db = get_database(user_id, db_id)
+        if not db:
+            await send_or_edit_message(
+                client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu()
+            )
+            return
+            
+        # Select this DB
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_db"] = db_id
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        users = db.get("users", [])
+        title = db.get("title", "Noma'lum")
+        
+        user_states[user_id] = "broadcast_wait_count"
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"✅ **Baza tanlandi!**\n\n📁 Guruh: _{title}_\n👥 Jami {len(users)} ta foydalanuvchi.\n\n"
+            f"📤 Ulardan nechtasini yuboray? (Raqam kiriting)\n_Eslatma: To'liq ro'yxat bazada saqlanadi._\nID: {db_id}",
+            reply_markup=broadcast_count_menu()
+        )
+        return
+
+    elif state == "wait_db_id_inviter":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu())
+            return
+            
+        db_id = text.strip()
+        db = get_database(user_id, db_id)
+        if not db:
+            await send_or_edit_message(client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=cancel_menu())
+            return
+            
+        # Select this DB
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_inviter_db"] = db_id
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        user_states[user_id] = "inviter_wait_group"
+        await send_or_edit_message(
+            client,
+            user_id,
+            "✅ Baza tanlandi!\n\nEndi odamlar qo'shilishi kerak bo'lgan **Guruh manzilini** yuboring:\n"
+            "• `@guruh_username`\n"
+            "• Yoki yopiq guruh manzili (`https://t.me/+...`)\n\n"
+            "⚠️ Akkauntingiz shu guruhda kamida a'zo (yaxshisi admin) bo'lishi kerak.",
+            reply_markup=cancel_menu()
+        )
+
+    elif state == "inviter_wait_group":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
+            return
+            
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_inviter_target"] = text.strip()
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        user_states[user_id] = "inviter_wait_count"
+        await send_or_edit_message(
+            client, 
+            user_id, 
+            "🔢 Nechta foydalanuvchi qo'shmoqchisiz (limit kiriting, masalan: 50):", 
+            reply_markup=cancel_menu()
+        )
+
+    elif state == "inviter_wait_count":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "Bekor qilindi.", reply_markup=main_menu())
+            return
+
+        try:
+            limit = int(text.strip())
+            if limit <= 0: raise ValueError
+        except ValueError:
+            await send_or_edit_message(client, user_id, "❌ Iltimos, faqat to'g'ri son kiriting:")
+            return
+
+        success, current_task = acquire_task(user_id, "inviter")
+        if not success:
+            await send_or_edit_message(client, user_id, active_task_message(current_task))
+            return
+            
+        # Bazani qayta o'qib tekshirish
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            db_id = data.get("selected_inviter_db")
+            target_group = data.get("selected_inviter_target")
+        except:
+            db_id = None
+            target_group = None
+
+        if not db_id or not target_group:
+            release_task(user_id, "inviter")
+            await send_or_edit_message(client, user_id, "❌ Baza yoki manzil topilmadi.", reply_markup=main_menu())
+            return
+
+        user_states[user_id] = "menu"
+        from pyrogram.types import ReplyKeyboardRemove
+        await send_or_edit_message(client, user_id, "⏳ Guruh tekshirilmoqda...", reply_markup=ReplyKeyboardRemove())
+        asyncio.create_task(inviter_task(user_id, target_group, db_id, limit))
+
+    elif state == "wait_db_id_view":
+        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(
+                client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
+            )
+            return
+            
+        db_id = text.strip()
+        db = get_database(user_id, db_id)
+        if not db:
+            await send_or_edit_message(
+                client, user_id, "❌ Bunday ID topilmadi. Qaytadan kiriting:", reply_markup=database_menu()
+            )
+            return
+            
+        json_file = get_user_json_file(user_id)
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["selected_db"] = db_id
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
+        users = db.get("users", [])
+        title = db.get("title", "Noma'lum")
+        
+        user_states[user_id] = "menu"
+        await send_or_edit_message(
+            client, user_id,
+            f"✅ **Baza tanlandi!**\n\n📁 Guruh: _{title}_\n👥 Jami {len(users)} ta foydalanuvchi.\n",
+            reply_markup=main_menu()
+        )
+        show_paginated_users(client, user_id, users)
+        return
+
+    # ----- SCRAPER (FULL OLISH) -----
+    elif state == "scrape_wait_group":
+        group_input = text
+        try:
+            user_client = await get_user_client_started(user_id)
+            chat_id, chat_title = await resolve_chat_id(user_client, text)
+            scraper_selections[user_id] = {
+                "group": group_input,
+                "chat_id": chat_id,
+                "chat_title": chat_title,
+            }
+            user_states[user_id] = "scrape_wait_filter"
+            await send_or_edit_message(
+                client,
+                user_id,
+                f"✅ Guruh qabul qilindi: **{chat_title}**\n\n"
+                "Endi scraping usulini tanlang:",
+                reply_markup=scraper_filter_menu(),
+            )
+        except Exception as e:
+            await send_or_edit_message(
+                client, user_id, explain_telegram_error(e), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+
+    elif state == "scrape_wait_filter":
+        if text not in SCRAPER_FILTERS:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "Iltimos, filtr tugmalaridan birini tanlang.",
+                reply_markup=scraper_filter_menu(),
+            )
+            return
+
+        selection = scraper_selections.get(user_id)
+        if not selection:
+            await send_or_edit_message(
+                client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        filter_type = text
+
+        if filter_type == "📊 Xabarlar orqali (Sekin)":
+            user_states[user_id] = "scrape_wait_message_count"
+            await send_or_edit_message(
+                client,
+                user_id,
+                "📊 **XABARLAR SONI**\n\n"
+                "Nechta xabarni o'qishni xohlaysiz?\n"
+                "• Masalan: `1000`, `10000`, `1000000`\n\n"
+                "⚠️ Maksimal: **5,000,000** ta xabar",
+                reply_markup=cancel_menu(),
+            )
+        else:
+            ok, current = acquire_task(user_id, "scrape")
+            if not ok:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    active_task_message(current),
+                    reply_markup=main_menu(),
+                )
+                user_states[user_id] = "menu"
+                return
+
+            await send_or_edit_message(
+                client,
+                user_id,
+                "⏳ Userlar yig'ilmoqda — bu biroz vaqt olishi mumkin.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            user_states[user_id] = "menu"
+
+            asyncio.create_task(scrape_task(user_id, selection["group"], filter_type))
+            scraper_selections.pop(user_id, None)
+
+    elif state == "scrape_wait_message_count":
+        try:
+            message_count = int(text.replace(",", "").replace(" ", ""))
+        except ValueError:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "❌ Iltimos, raqam kiriting. Masalan: `1000`",
+                reply_markup=cancel_menu(),
+            )
+            return
+
+        if message_count < 1:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "❌ Kamida 1 ta xabar kiritishingiz kerak.",
+                reply_markup=cancel_menu(),
+            )
+            return
+
+        if message_count > 5000000:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "❌ Maksimal 5,000,000 ta xabar kiritish mumkin.",
+                reply_markup=cancel_menu(),
+            )
+            return
+
+        selection = scraper_selections.get(user_id)
+        if not selection:
+            await send_or_edit_message(
+                client, user_id, "❌ Xatolik. Qayta boshlang.", reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        ok, current = acquire_task(user_id, "scrape")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"⏳ {message_count:,} ta xabar o'qilmoqda — bu biroz vaqt olishi mumkin.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        user_states[user_id] = "menu"
+
+        asyncio.create_task(
+            scrape_task(
+                user_id, selection["group"], "📊 Xabarlar orqali (Sekin)", message_count
+            )
+        )
+        scraper_selections.pop(user_id, None)
+
+    # ----- GURUH QIDIRISH (GLOBAL SEARCH) -----
+    elif state == "search_wait_keyword":
+        keyword = text
+        ok, current = acquire_task(user_id, "search")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"⏳ '{keyword}' so'zi bo'yicha Telegram global tarmog'idan guruhlar axtarilmoqda...",
+        )
+
+        try:
+            user_client = await get_user_client_started(user_id)
+            result = await user_client.invoke(
+                functions.contacts.Search(q=keyword, limit=20)
+            )
+
+            found_chats = []
+            for chat in result.chats:
+                if getattr(chat, "username", None):
+                    found_chats.append(f"📌 @{chat.username} | {chat.title}")
+
+            if found_chats:
+                res_text = "🔎 **Topilgan guruhlar:**\n\n" + "\n".join(found_chats)
+                await send_or_edit_message(
+                    client, user_id, res_text, reply_markup=main_menu()
+                )
+            else:
+                await send_or_edit_message(
+                    client,
+                    user_id,
+                    "❌ Hech qanday guruh topilmadi.",
+                    reply_markup=main_menu(),
+                )
+        except Exception as e:
+            await send_or_edit_message(
+                client, user_id, f"❌ Qidiruvda xatolik: {e}", reply_markup=main_menu()
+            )
+        finally:
+            release_task(user_id, "search", cleanup=True)
+
+        user_states[user_id] = "menu"
+
+    # ----- XABAR YUBORISH (BROADCAST) -----
+    elif state == "broadcast_wait_count":
+        usernames = load_user_database(user_id)
+        if not usernames:
+            await send_or_edit_message(
+                client, user_id, "❌ Baza topilmadi yoki bo'sh. Qaytadan baza tanlang.", reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+            
+        if text == "Barchasiga yuborish":
+            count = len(usernames)
+        else:
+            try:
+                count = int(text)
+                if count <= 0:
+                    raise ValueError
+                if count > len(usernames):
+                    count = len(usernames)
+            except ValueError:
+                await send_or_edit_message(
+                    client, user_id, "❌ Noto'g'ri son kiritildi. Qaytadan kiriting:", reply_markup=broadcast_count_menu()
+                )
+                return
+        
+        temp_broadcast_count[user_id] = count
+        user_states[user_id] = "broadcast_wait_text"
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"✅ **{count}** ta user tanlandi.\n\n"
+            "Endi yuboriladigan xabar matnini yozing:\n"
+            "_(Spamdan himoya uchun har bir xabar orasida 3 soniya pauza qo'yiladi)_",
+            reply_markup=cancel_menu(),
+        )
+        return
+
+    elif state == "broadcast_wait_text":
+        msg_text = text
+        count = temp_broadcast_count.get(user_id, 0)
+        user_states[user_id] = "menu"
+        temp_broadcast_count.pop(user_id, None)
+
+        usernames = load_user_database(user_id)
+        if not usernames:
+            await send_or_edit_message(
+                client,
+                user_id,
+                "❌ Bazada foydalanuvchi yo'q.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        if count > 0 and count < len(usernames):
+            usernames = usernames[:count]
+
+        ok, current = acquire_task(user_id, "broadcast")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            return
+
+        from pyrogram.types import ReplyKeyboardRemove as RKR
+
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"⏳ **{len(usernames)}** ta foydalanuvchiga xabar yuborish boshlandi...\n"
+            "Jarayon fonda davom etadi, natija alohida xabar qilib yuboriladi.",
+            reply_markup=RKR(),
+        )
+
+        asyncio.create_task(broadcast_task(user_id, usernames, msg_text))
+
+    # ----- U-TAG (MENYU ORQALI) -----
+    elif state == "utag_wait_group":
+        ok, current = acquire_task(user_id, "utag")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        try:
+            user_client = await get_user_client_started(user_id)
+            target = parse_group_input(text)
+            chat_id, chat_title = await resolve_chat_id(user_client, text)
+            
+            # Guruh topildi, matni so'raymiz
+            release_task(user_id, "utag", cleanup=False)  # Taskni bo'shatamiz, lekin clientni O'CHIRMAYMIZ
+            temp_add_users[user_id] = {"chat_id": chat_id, "chat_title": chat_title, "target": target}
+            user_states[user_id] = "utag_wait_text"
+            await send_or_edit_message(
+                client,
+                user_id,
+                f"✅ Guruh topildi: **{chat_title}**\n\n"
+                "📝 Qo'shimcha matn yozing (mention + matn):\n"
+                "Yoki matn kerak bo'lmasa `yo'q` deb yozing.",
+                reply_markup=cancel_menu(),
+            )
+        except Exception as e:
+            release_task(user_id, "utag", cleanup=False)
+            await send_or_edit_message(
+                client, user_id, explain_telegram_error(e), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+
+    elif state == "utag_wait_text":
+        info = temp_add_users.pop(user_id, None)
+        if not info:
+            user_states[user_id] = "menu"
+            await send_or_edit_message(client, user_id, "❌ Xatolik. Qaytadan urinib ko'ring.", reply_markup=main_menu())
+            return
+
+        utag_text = "" if text.lower() in ("yo'q", "yoq", "no", "-") else text
+
+        ok, current = acquire_task(user_id, "utag")
+        if not ok:
+            await send_or_edit_message(
+                client, user_id, active_task_message(current), reply_markup=main_menu()
+            )
+            user_states[user_id] = "menu"
+            return
+
+        stop_flags[user_id] = False
+        user_states[user_id] = "menu"
+
+        await send_or_edit_message(
+            client,
+            user_id,
+            f"🎯 **{info['chat_title']}** guruhida U-Tag boshlandi!\n\n"
+            "To'xtatish uchun: `.stop` yozing.",
+            reply_markup=main_menu(),
+        )
+        asyncio.create_task(utag_task(user_id, info.get("target", info["chat_id"]), utag_text))
+
+
+@bot_app.on_callback_query(filters.regex("^delete_broadcast$"))
+async def delete_broadcast_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    history_file = os.path.join(DATA_DIR, f"broadcast_history_{user_id}.json")
+    
+    if not os.path.exists(history_file):
+        await callback_query.answer("❌ O'chirish uchun xabarlar topilmadi.", show_alert=True)
+        return
+        
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            sent_messages = json.load(f)
+    except Exception:
+        sent_messages = []
+        
+    if not sent_messages:
+        await callback_query.answer("❌ O'chirish uchun xabarlar topilmadi.", show_alert=True)
+        return
+
+    await callback_query.answer("🗑️ Xabarlarni o'chirish boshlandi. Iltimos kuting...", show_alert=False)
+    
+    # Hide the button and update message text to indicate deletion process
+    try:
+        await callback_query.edit_message_text(
+            callback_query.message.text + "\n\n⏳ **Xabarlar o'chirilmoqda...**",
+            reply_markup=None
+        )
+    except:
+        pass
+        
+    deleted_count = 0
+    failed_count = 0
+    
+    # Run the deletion in background to avoid blocking callback
+    async def process_deletion():
+        nonlocal deleted_count, failed_count
+        user_client = await get_user_client_started(user_id)
+        if not user_client:
+            return
+            
+        for item in sent_messages:
+            try:
+                await user_client.delete_messages(chat_id=item["chat_id"], message_ids=item["message_id"])
+                deleted_count += 1
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 5)
+                try:
+                    await user_client.delete_messages(chat_id=item["chat_id"], message_ids=item["message_id"])
+                    deleted_count += 1
+                except:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+            await asyncio.sleep(0.5)  # To avoid aggressive flooding while deleting
+            
+        # Clean up the file
+        if os.path.exists(history_file):
+            os.remove(history_file)
+            
+        try:
+            await callback_query.message.edit_text(
+                callback_query.message.text.replace("⏳ **Xabarlar o'chirilmoqda...**", "") + 
+                f"\n\n✅ **Natija:**\n🗑️ Muvaffaqiyatli o'chirildi: **{deleted_count}** ta\n⚠️ O'chirib bo'lmadi: **{failed_count}** ta"
+            )
+        except:
+            pass
+
+    asyncio.create_task(process_deletion())
+
+
+@bot_app.on_callback_query(filters.regex("^pg:"))
+async def pagination_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    action = callback_query.data.split(":")[1]
+
+    now = time.time()
+    with tasks_lock:
+        last_click = pagination_cooldown.get(user_id, 0)
+        if now - last_click < PAGINATION_COOLDOWN:
+            await callback_query.answer("Juda tez bosyapsiz. Biroz kuting.")
+            return
+        pagination_cooldown[user_id] = now
+
+    pag = user_pagination.get(user_id)
+    if not pag:
+        await callback_query.answer("Ro'yxat topilmadi. Qayta oching.", show_alert=True)
+        return
+
+    usernames = pag["usernames"]
+    page = pag["page"]
+    total = len(usernames)
+    total_pages = get_total_pages(total)
+
+    if action == "close":
+        user_pagination.pop(user_id, None)
+        await callback_query.message.delete()
+        await callback_query.answer("Yopildi")
+        return
+
+    if action == "prev" and page > 0:
+        page -= 1
+    elif action == "next" and page < total_pages - 1:
+        page += 1
+    else:
+        await callback_query.answer()
+        return
+
+    pag["page"] = page
+    chunk, start_num, end_num = get_page_slice(usernames, page)
+    text = format_user_batch(total, chunk, start_num, end_num)
+    keyboard = build_nav_keyboard(page, total)
+
+    await callback_query.message.edit_text(text, reply_markup=keyboard)
+    await callback_query.answer()
+
+
+@bot_app.on_message(filters.command("add_admin") & filters.private)
+async def add_admin_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/add_admin <foydalanuvchi_id>`")
+        return
+        
+    try:
+        new_admin = int(message.command[1])
+        admins = load_admins()
+        if new_admin not in admins:
+            admins.append(new_admin)
+            save_admins(admins)
+            await message.reply_text(f"✅ {new_admin} ID'li foydalanuvchi admin etib tayinlandi.\nEndi u ham dashboardni ko'ra oladi va foydalanuvchilarni qabul qilishi mumkin.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi allaqachon admin.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("del_admin") & filters.private)
+async def del_admin_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_admin <foydalanuvchi_id>`")
+        return
+        
+    try:
+        del_admin = int(message.command[1])
+        if del_admin == SUPER_ADMIN_ID:
+            await message.reply_text("❌ O'zingizni adminlikdan ololmaysiz!")
+            return
+            
+        admins = load_admins()
+        if del_admin in admins:
+            admins.remove(del_admin)
+            save_admins(admins)
+            await message.reply_text(f"✅ {del_admin} ID'li foydalanuvchi adminlikdan o'chirildi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi admin emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("add_vip") & filters.private)
+async def add_vip_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+    
+    # Forward qilingan xabardan ID olish
+    new_vip = None
+    days = None
+    
+    if message.reply_to_message and message.reply_to_message.forward_from:
+        new_vip = message.reply_to_message.forward_from.id
+    
+    if len(message.command) >= 2:
+        try:
+            new_vip = int(message.command[1])
+        except:
+            pass
+        # Kunlik muddat: /add_vip 123456 30 (30 kun)
+        if len(message.command) >= 3:
+            try:
+                days = int(message.command[2])
+            except:
+                pass
+    
+    if not new_vip:
+        await message.reply_text(
+            "❌ **Foydalanish:**\n\n"
+            "1️⃣ `/add_vip <ID>` — umrbod VIP\n"
+            "2️⃣ `/add_vip <ID> <kunlar>` — muddatli VIP (masalan 30 kun)\n"
+            "3️⃣ Odam xabarini **forward** qiling va unga reply qilib `/add_vip` yozing\n\n"
+            "💡 ID bilmaysizmi? Odam botga kirsin, /start bossin, keyin `/users` bilan ko'ring."
+        )
+        return
+        
+    try:
+        VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+        vips = {}
+        if os.path.exists(VIP_FILE):
+            try:
+                with open(VIP_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    # Eski formatni yangi formatga o'tkazish
+                    if isinstance(loaded, list):
+                        vips = {str(uid): {"added": time.time(), "days": None} for uid in loaded}
+                    else:
+                        vips = loaded
+            except:
+                pass
+                
+        str_vip = str(new_vip)
+        expiry_text = "♾ Umrbod (cheksiz)" if not days else f"📅 {days} kun"
+        
+        vips[str_vip] = {
+            "added": time.time(),
+            "days": days,
+            "expiry": time.time() + (days * 86400) if days else None
+        }
+        with open(VIP_FILE, "w", encoding="utf-8") as f:
+            json.dump(vips, f, indent=4)
+        await message.reply_text(
+            f"✅ **VIP qo'shildi!**\n\n"
+            f"👤 ID: `{new_vip}`\n"
+            f"⏰ Muddat: {expiry_text}\n\n"
+            f"Endi unga bot tekin ishlaydi. Dashboard'da ko'rinmaydi."
+        )
+    except:
+        await message.reply_text("❌ Xatolik yuz berdi.")
+
+
+@bot_app.on_message(filters.command("del_vip") & filters.private)
+async def del_vip_command(client, message):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_vip <foydalanuvchi_id>`")
+        return
+        
+    try:
+        del_vip = int(message.command[1])
+        VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+        vips = []
+        if os.path.exists(VIP_FILE):
+            try:
+                with open(VIP_FILE, "r", encoding="utf-8") as f:
+                    vips = json.load(f)
+            except:
+                pass
+                
+        if del_vip in vips:
+            vips.remove(del_vip)
+            with open(VIP_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(set(vips)), f, indent=4)
+            await message.reply_text(f"✅ {del_vip} VIP ro'yxatdan o'chirildi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi VIP emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+@bot_app.on_message(filters.command("add_member") & filters.private)
+async def add_member_command(client, message):
+    """Lichkadan kelishgan odamga qo'lda obuna berish"""
+    user_id = message.from_user.id
+    if not is_admin(user_id) and not is_super_admin(user_id):
+        return
+    
+    target_id = None
+    days = SUBSCRIPTION_DAYS  # Default: 30 kun
+    
+    # Forward qilingan xabardan ID olish
+    if message.reply_to_message and message.reply_to_message.forward_from:
+        target_id = message.reply_to_message.forward_from.id
+    
+    if len(message.command) >= 2:
+        try:
+            target_id = int(message.command[1])
+        except:
+            pass
+        if len(message.command) >= 3:
+            try:
+                days = int(message.command[2])
+            except:
+                pass
+    
+    if not target_id:
+        await message.reply_text(
+            "📋 **OBUNACHI QO'SHISH**\n\n"
+            "Lichkadan kelishgan odamga qo'lda obuna berish:\n\n"
+            "**Foydalanish:**\n"
+            f"1️⃣ `/add_member <ID>` — {SUBSCRIPTION_DAYS} kunga obuna\n"
+            "2️⃣ `/add_member <ID> <kunlar>` — belgilangan kunga\n"
+            "3️⃣ Odam xabarini forward qilib `/add_member` deb reply qiling\n\n"
+            "**Misol:**\n"
+            "`/add_member 123456789 30` — 30 kunlik obuna\n"
+            "`/add_member 123456789 7` — 1 haftalik sinov\n\n"
+            "💡 **ID qanday topiladi?**\n"
+            "Odam botga /start bosganida logda chiqadi yoki @userinfobot ga yuboring."
+        )
+        return
+    
+    try:
+        subs = load_subscriptions()
+        str_target = str(target_id)
+        
+        expiry_time = time.time() + (days * 86400)
+        subs[str_target] = {
+            "expiry": expiry_time,
+            "source": "admin_manual",
+            "added_by": user_id,
+            "added_at": time.time()
+        }
+        save_subscriptions(subs)
+        
+        # Foydalanuvchiga xabar yuborish
+        try:
+            expiry_date = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_time))
+            await client.send_message(
+                target_id,
+                f"🎉 **Tabriklaymiz!**\n\n"
+                f"✅ Sizga **{days}** kunlik obuna faollashtirildi!\n"
+                f"📅 Amal qilish muddati: `{expiry_date}`\n\n"
+                f"Botning barcha funksiyalaridan foydalanishingiz mumkin.\n"
+                f"Boshlash uchun /start tugmasini bosing."
+            )
+        except Exception:
+            pass  # Foydalanuvchi botni start qilmagan bo'lishi mumkin
+        
+        expiry_date = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_time))
+        await message.reply_text(
+            f"✅ **Obuna faollashtirildi!**\n\n"
+            f"👤 ID: `{target_id}`\n"
+            f"📅 Muddat: **{days}** kun\n"
+            f"⏰ Tugash sanasi: `{expiry_date}`\n"
+            f"📝 Turi: Qo'lda (admin tomonidan)"
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Xatolik: {e}")
+
+
+@bot_app.on_message(filters.command("del_member") & filters.private)
+async def del_member_command(client, message):
+    """Obunani bekor qilish"""
+    user_id = message.from_user.id
+    if not is_admin(user_id) and not is_super_admin(user_id):
+        return
+    
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/del_member <ID>`")
+        return
+    
+    try:
+        target_id = int(message.command[1])
+        subs = load_subscriptions()
+        str_target = str(target_id)
+        
+        if str_target in subs:
+            del subs[str_target]
+            save_subscriptions(subs)
+            await message.reply_text(f"✅ `{target_id}` obunasi bekor qilindi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi obunachi emas.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+
+# ================= QOROVUL VA AQLLI SOTUVCHI =================
+
+@bot_app.on_message(filters.group & filters.service)
+async def handle_service_messages(client, message):
+    """Guruhdagi service xabarlarni o'chiradi va salomlashadi/xayrlashadi"""
+    try:
+        # Yangi a'zolar qo'shilganda
+        if getattr(message, "new_chat_members", None):
+            for new_member in message.new_chat_members:
+                if new_member.is_bot:
+                    continue
+                
+                name = new_member.first_name or "A'zo"
+                mention = f"[{name}](tg://user?id={new_member.id})"
+                welcome_text = (
+                    f"Assalomu alaykum, Hurmatli {mention}!\n\n"
+                    "Bizning Empire oilamizga qo'shilganingizdan xursandmiz. Iltimos, boshqalarni va o'zingizni xurmatingizni saqlang. Istasangiz qonun qoidalar bilan quyida tanishib chiqishingiz mumkin: <link>"
+                )
+                try:
+                    await client.send_message(message.chat.id, welcome_text, disable_web_page_preview=True)
+                except:
+                    pass
+
+        # A'zo guruhdan chiqqanda
+        elif getattr(message, "left_chat_member", None):
+            left_member = message.left_chat_member
+            if not left_member.is_bot:
+                try:
+                    await client.send_message(
+                        message.chat.id, 
+                        "Oilamizni tark etayotganingizdan afsusdamiz. Yana qaytasiz deb umid qilamiz!"
+                    )
+                except:
+                    pass
+
+        # Service xabarning o'zini o'chirish
+        await message.delete()
+    except:
+        pass
+
+@bot_app.on_message(filters.group & filters.text)
+async def smart_seller(client, message):
+    """Guruhda narx so'raganlarga javob beradi va lichkasiga yozadi"""
+    # Botning o'zi yoki boshqa botlar yozsa e'tibor bermaslik
+    if not message.from_user or message.from_user.is_bot:
+        return
+        
+    text = message.text.lower()
+    
+    # Kalit so'zlar
+    keywords = ["narx", "qancha", "obuna", "sotib", "to'lov", "tolov", "tarif"]
+    if any(word in text for word in keywords):
+        try:
+            # Avval lichkaga yozishga harakat qilamiz
+            await client.send_message(
+                message.from_user.id, 
+                "💎 **Empire Bot Tariflari:**\n\n"
+                "• 1 Oylik obuna - **100 Stars** (yoki **26.000 UZS**)\n\n"
+                "Barcha VIP funksiyalar (Scraper, U-Tag, Mass DM) to'liq ochiladi.\n"
+                "To'lov qilish yoki sinab ko'rish uchun avval botimizga o'ting va **/start** bosing.\n"
+                "Savollaringiz bo'lsa adminga murojaat qiling."
+            )
+            # Agar lichkaga yozish muvaffaqiyatli bo'lsa, guruhda javob beramiz
+            await message.reply_text("Ma'lumotlarni shaxsiy xabaringizga (lichkangizga) yubordim 📩")
+        except:
+            # Lichka yopiq bo'lsa (botni start qilmagan bo'lsa)
+            await message.reply_text("Sizga ma'lumot yuborish uchun iltimos, avval botimizga kirib **/start** bosing!")
+
+
+def reset_user_session():
+    for name in (
+        "user_session.session",
+        "user_session.session-journal",
+        "empire_bot_session.session",
+        "empire_bot_session.session-journal",
+    ):
+        path = os.path.join(BASE_DIR, name)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except PermissionError:
+                print(f"⚠️ {name} hozir band. Botni to'xtatib, qo'lda o'chiring.")
 
 
 if __name__ == "__main__":
-    run_bot()
-
+    print("====================================")
+    print(" VENTO SERVER ISHGA TUSHIRILDI ")
+    print("====================================")
+    print(f"📁 Working directory: {BASE_DIR}")
+    print(f"🔑 API_ID: {config.get('API_ID', 'NOT SET')}")
+    print(
+        f"🔑 API_HASH: {config.get('API_HASH', 'NOT SET')[:10]}..."
+        if config.get("API_HASH")
+        else "🔑 API_HASH: NOT SET"
+    )
+    print(
+        f"🤖 BOT_TOKEN: {config.get('BOT_TOKEN', 'NOT SET')[:20]}..."
+        if config.get("BOT_TOKEN")
+        else "🤖 BOT_TOKEN: NOT SET"
+    )
+    print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
+    print(f"📊 logged_in_users initialized: {logged_in_users}")
+    print("🚀 Botni ishga tushirish...")
+    
+    loop = asyncio.get_event_loop()
+    loop.create_task(subscription_checker())
+    bot_app.run()

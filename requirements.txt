@@ -1,16 +1,4 @@
 Kurigram
 TgCrypto==1.2.5
 requests
-pyrogram
-tgcrypto
-deep-translator
-wikipedia
-gTTS
 psutil
-qrcode
-pyshorteners
-pillow
-python-dotenv
-yt-dlp
-beautifulsoup4
-faker
