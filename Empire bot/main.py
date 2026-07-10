@@ -12,7 +12,7 @@ import requests
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from pyrogram import Client, filters, idle, StopPropagation
+from pyrogram import Client, filters, idle, StopPropagation, ContinuePropagation
 from pyrogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -1578,16 +1578,16 @@ async def utag_task(user_id, chat_identifier, text):
 
 @bot_app.on_message(filters.all, group=-1)
 async def ban_filter(client, message):
-    if not message.from_user:
-        return
-    if is_banned(message.from_user.id):
+    if message.from_user and is_banned(message.from_user.id):
         raise StopPropagation
+    raise ContinuePropagation
 
 @bot_app.on_callback_query(group=-1)
 async def ban_callback_filter(client, callback_query):
     if callback_query.from_user and is_banned(callback_query.from_user.id):
         await callback_query.answer("❌ Siz botdan ban qilingansiz.", show_alert=True)
         raise StopPropagation
+    raise ContinuePropagation
 
 @bot_app.on_raw_update()
 async def handle_payment_updates(client, update, users, chats):
