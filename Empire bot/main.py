@@ -3920,7 +3920,33 @@ if __name__ == "__main__":
     print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
     print(f"📊 logged_in_users initialized: {logged_in_users}")
     print("🚀 Botni ishga tushirish...")
-    
-    loop = asyncio.get_event_loop()
-    loop.create_task(subscription_checker())
-    bot_app.run()
+
+    import asyncio
+    from pyrogram.errors import FloodWait as StartupFloodWait
+
+    async def main():
+        retry = 0
+        while True:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(subscription_checker())
+                await bot_app.start()
+                print("✅ Bot muvaffaqiyatli ishga tushdi!")
+                await idle()
+                await bot_app.stop()
+                break
+            except StartupFloodWait as e:
+                wait_sec = e.value + 5
+                print(f"⏳ Telegram FloodWait: {wait_sec} soniya kutilmoqda (urinish #{retry+1})...")
+                await asyncio.sleep(wait_sec)
+                retry += 1
+            except Exception as e:
+                print(f"❌ Startup xatosi: {e}")
+                await asyncio.sleep(10)
+                retry += 1
+                if retry >= 5:
+                    print("❌ 5 marta urinib ko'rildi, bot to'xtatildi.")
+                    break
+
+    asyncio.run(main())
+
