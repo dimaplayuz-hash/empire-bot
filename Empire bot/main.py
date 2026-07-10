@@ -3961,5 +3961,6 @@ if __name__ == "__main__":
                     print("❌ 5 marta urinib ko'rildi, bot to'xtatildi.")
                     break
 
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
 
