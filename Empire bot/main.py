@@ -53,7 +53,22 @@ def load_config():
     bot_token = os.getenv("BOT_TOKEN")
 
     if api_id and api_hash and bot_token:
-        return {"API_ID": int(api_id), "API_HASH": api_hash, "BOT_TOKEN": bot_token}
+        cfg = {"API_ID": int(api_id), "API_HASH": api_hash, "BOT_TOKEN": bot_token}
+        # Admin ID'larini ham o'qish
+        super_admin = os.getenv("SUPER_ADMIN_ID")
+        second_admin = os.getenv("SECOND_ADMIN_ID")
+        admin_ids_raw = os.getenv("ADMIN_IDS")
+        if super_admin:
+            cfg["SUPER_ADMIN_ID"] = int(super_admin)
+        if second_admin:
+            cfg["SECOND_ADMIN_ID"] = int(second_admin)
+        if admin_ids_raw:
+            try:
+                import json as _json
+                cfg["ADMIN_IDS"] = _json.loads(admin_ids_raw)
+            except:
+                cfg["ADMIN_IDS"] = [int(x.strip()) for x in admin_ids_raw.split(",") if x.strip().isdigit()]
+        return cfg
 
     # Local development uchun config.json
     parent_config = os.path.join(os.path.dirname(BASE_DIR), "config.json")
@@ -649,8 +664,8 @@ def is_banned(user_id):
     return user_id in load_banned()
 
 
-SUPER_ADMIN_ID = 8513957498
-SECOND_ADMIN_ID = 8348307850
+SUPER_ADMIN_ID = config.get("SUPER_ADMIN_ID", 8513957498)
+SECOND_ADMIN_ID = config.get("SECOND_ADMIN_ID", 8348307850)
 
 # Bot offline holati
 bot_offline = False
