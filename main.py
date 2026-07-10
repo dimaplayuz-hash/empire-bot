@@ -12,14 +12,20 @@ import requests
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters, idle, StopPropagation, ContinuePropagation
 from pyrogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     Message,
+    ReplyKeyboardRemove,
 )
+try:
+    from pyrogram.types import LabeledPrice
+except ImportError:
+    LabeledPrice = None  # Eski Pyrogram versiyalarida yo'q
+
 from pyrogram.errors import (
     FloodWait,
     PeerIdInvalid,
@@ -32,6 +38,7 @@ from pyrogram.errors import (
     UserDeactivated,
 )
 from pyrogram import idle
+from pyrogram import raw
 from pyrogram.raw import functions
 
 # ================= KONSOL VA TOKEN SOZLAMALARI =================
@@ -46,7 +53,22 @@ def load_config():
     bot_token = os.getenv("BOT_TOKEN")
 
     if api_id and api_hash and bot_token:
-        return {"API_ID": int(api_id), "API_HASH": api_hash, "BOT_TOKEN": bot_token}
+        cfg = {"API_ID": int(api_id), "API_HASH": api_hash, "BOT_TOKEN": bot_token}
+        # Admin ID'larini ham o'qish
+        super_admin = os.getenv("SUPER_ADMIN_ID")
+        second_admin = os.getenv("SECOND_ADMIN_ID")
+        admin_ids_raw = os.getenv("ADMIN_IDS")
+        if super_admin:
+            cfg["SUPER_ADMIN_ID"] = int(super_admin)
+        if second_admin:
+            cfg["SECOND_ADMIN_ID"] = int(second_admin)
+        if admin_ids_raw:
+            try:
+                import json as _json
+                cfg["ADMIN_IDS"] = _json.loads(admin_ids_raw)
+            except:
+                cfg["ADMIN_IDS"] = [int(x.strip()) for x in admin_ids_raw.split(",") if x.strip().isdigit()]
+        return cfg
 
     # Local development uchun config.json
     parent_config = os.path.join(os.path.dirname(BASE_DIR), "config.json")
@@ -218,6 +240,130 @@ def save_stats(stats):
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=4)
 
+
+def bot_api_request(method, **payload):
+    url = f"https://api.telegram.org/bot{config['BOT_TOKEN']}/{method}"
+    try:
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Bot API {method} xato: {e}")
+        return {"ok": False, "description": str(e)}
+
+
+async def prompt_subscription_payment(user_id):
+    """Pyrogram send_invoice qo'llab-quvvatlamaydi — Bot API orqali invoice yuboriladi."""
+    result = bot_api_request(
+        "sendInvoice",
+        chat_id=user_id,
+        title="Premium Obuna",
+        description=(
+            f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun "
+            "to'liq foydalanish imkoniyati."
+        ),
+        payload="monthly_sub",
+        provider_token="",
+        currency="XTR",
+        prices=[{"label": "Oylik obuna", "amount": SUBSCRIPTION_PRICE_STARS}],
+    )
+    if not result.get("ok"):
+        error_desc = result.get("description", "Noma'lum xato")
+        await bot_app.send_message(
+            user_id,
+            "❌ To'lov hisob-fakturasini yuborib bo'lmadi. Keyinroq /start bosing.\n\n"
+            f"`{error_desc}`",
+        )
+        return False
+
+    await bot_app.send_message(
+        chat_id=user_id,
+        text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]]
+        ),
+    )
+    return True
+
+
+LOGIN_FLOW_STATES = {
+    "login_phone",
+    "login_code",
+    "login_password",
+    "login_upload",
+}
+
+
+async def cleanup_login_attempt(user_id):
+    """Login jarayonidagi vaqtinchalik ma'lumotlarni tozalash."""
+    if user_id not in login_data:
+        return
+    try:
+        data = login_data[user_id]
+        client_obj = data.get("client")
+        if client_obj and client_obj.is_connected:
+            await client_obj.disconnect()
+    except Exception:
+        pass
+    login_data.pop(user_id, None)
+
+
+async def require_subscription_before_login(message, user_id):
+    """Obunasiz foydalanuvchini login o'rniga to'lovga yo'naltirish."""
+    await cleanup_login_attempt(user_id)
+    user_states[user_id] = "wait_payment"
+    await prompt_subscription_payment(user_id)
+    await message.reply_text(
+        "💳 **Obuna to'lovi talab qilinadi.**\n\n"
+        "Botdan foydalanish uchun avval to'lovni amalga oshiring. "
+        "Admin tasdiqlagach /start bosing va login qiling.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+async def show_post_auth_screen(client, message, user_id):
+    """Login muvaffaqiyatidan keyin obuna yoki asosiy menyu."""
+    if not is_subscribed(user_id):
+        await require_subscription_before_login(message, user_id)
+        return
+
+    user_states[user_id] = "menu"
+    logged_in_users.add(user_id)
+    first_name = message.from_user.first_name or "Mijoz"
+    await message.reply_text(
+        f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
+        f"👋 Assalomu alaykum, {first_name}!\n\n"
+        f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
+        f"📌 **Mavjud xizmatlar:**\n"
+        f"• 🚀 Scraper — guruhlardan user yig'ish\n"
+        f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
+        f"• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
+        f"Quyidagi tugmalardan birini tanlang:",
+        reply_markup=main_menu(),
+    )
+
+
+async def begin_login_flow(message, user_id):
+    if not is_subscribed(user_id):
+        await require_subscription_before_login(message, user_id)
+        return
+
+    user_states[user_id] = "login_phone"
+    markup = ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📞 Telefon raqamini yuborish", request_contact=True)],
+            [KeyboardButton("❌ Bekor qilish")],
+        ],
+        resize_keyboard=True,
+    )
+    await message.reply_text(
+        "🔌 **Sessiya ulash jarayoni boshlandi.**\n\n"
+        "Iltimos, Telegram akkauntingiz telefon raqamini kiriting (masalan: `+998901234567` formatida) "
+        "yoki pastdagi tugma orqali yuboring:",
+        reply_markup=markup,
+    )
+
+
 def is_subscribed(user_id):
     if is_admin(user_id) or is_super_admin(user_id) or is_second_admin(user_id):
         return True
@@ -355,11 +501,16 @@ async def get_user_client_started(user_id):
                     pass
             
             logged_in_users.discard(user_id)
-            user_states[user_id] = "login_phone"
-            
+            if is_subscribed(user_id):
+                user_states[user_id] = "login_phone"
+                raise ValueError(
+                    "❌ **Sessiyangiz muddati tugagan yoki faolsizlantirilgan!**\n\n"
+                    "Sessiya o'chirildi. Iltimos, /start buyrug'ini berib qaytadan login qiling."
+                )
+            user_states[user_id] = "wait_payment"
             raise ValueError(
-                "❌ **Sessiyangiz muddati tugagan yoki faolsizlantirilgan!**\n\n"
-                "Sessiya o'chirildi. Iltimos, /start buyrug'ini berib qaytadan login qiling."
+                "❌ **Sessiyangiz muddati tugagan va obunangiz yo'q!**\n\n"
+                "Sessiya o'chirildi. /start bosing va obunani yangilang."
             )
     return client
 
@@ -494,8 +645,27 @@ def save_admins(admins_list):
     with open(ADMINS_FILE, "w", encoding="utf-8") as f:
         json.dump(list(set(admins_list)), f, indent=4)
 
-SUPER_ADMIN_ID = 8513957498
-SECOND_ADMIN_ID = 8348307850
+BANNED_FILE = os.path.join(DATA_DIR, "banned.json")
+
+def load_banned():
+    if not os.path.exists(BANNED_FILE):
+        return []
+    try:
+        with open(BANNED_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_banned(banned_list):
+    with open(BANNED_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(set(banned_list)), f, indent=4)
+
+def is_banned(user_id):
+    return user_id in load_banned()
+
+
+SUPER_ADMIN_ID = config.get("SUPER_ADMIN_ID", 8513957498)
+SECOND_ADMIN_ID = config.get("SECOND_ADMIN_ID", 8348307850)
 
 # Bot offline holati
 bot_offline = False
@@ -633,12 +803,9 @@ def check_flood(user_id):
 
 MENU_BUTTONS = frozenset(
     {
-        "⚡ Scraper",
-        "🌐 Qidiruv",
-        "📮 Xabarnoma",
-        "💾 Bazalar",
-        "🧠 Yo'llanma",
-        "🛸 Profil",
+        "⚡ Super Scraper",
+        "📮 Smart Xabarnoma",
+        "💾 Yig'ilgan Bazalar",
     }
 )
 
@@ -660,10 +827,10 @@ SCRAPER_FILTERS = frozenset(
 )
 
 TASK_LABELS = {
-    "scrape": "⚡ Scraper",
-    "broadcast": "📮 Xabarnoma",
-    "search": "🌐 Qidiruv",
-    "utag": "🧠 Yo'llanma",
+    "scrape": "⚡ Super Scraper",
+    "broadcast": "📮 Smart Xabarnoma",
+    "search": "🌐 Global Qidiruv",
+    "utag": "🧠 Smart Yo'llanma",
 }
 
 DEDUP_EXEMPT = frozenset({"❌ Bekor qilish", "/cancel"})
@@ -1315,9 +1482,8 @@ async def broadcast_task(target_id, recipients, body, auto_delete=False):
 def main_menu():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⚡ Scraper"), KeyboardButton("📮 Xabarnoma")],
-            [KeyboardButton("🌐 Qidiruv"), KeyboardButton("🧠 Yo'llanma")],
-            [KeyboardButton("💾 Bazalar"), KeyboardButton("🛸 Profil")],
+            [KeyboardButton("⚡ Super Scraper")],
+            [KeyboardButton("📮 Smart Xabarnoma"), KeyboardButton("💾 Yig'ilgan Bazalar")],
         ],
         resize_keyboard=True,
         placeholder="Bo'limni tanlang...",
@@ -1426,8 +1592,120 @@ async def utag_task(user_id, chat_identifier, text):
         release_task(user_id, "utag", cleanup=True)
 
 # ================= PAYMENT HANDLERLAR =================
-# Note: Pyrogram does not support on_pre_checkout_query directly
-# Payment handling needs to be implemented differently
+# Pyrogram to'lov handlerlarini to'g'ridan-to'g'ri qo'llab-quvvatlamaydi.
+# Bot API va raw update orqali ishlaydi.
+
+
+@bot_app.on_message(filters.all, group=-1)
+async def ban_filter(client, message):
+    if message.from_user and is_banned(message.from_user.id):
+        raise StopPropagation
+
+@bot_app.on_callback_query(group=-1)
+async def ban_callback_filter(client, callback_query):
+    if callback_query.from_user and is_banned(callback_query.from_user.id):
+        await callback_query.answer("❌ Siz botdan ban qilingansiz.", show_alert=True)
+        raise StopPropagation
+
+@bot_app.on_raw_update()
+async def handle_payment_updates(client, update, users, chats):
+    try:
+        if isinstance(update, raw.types.UpdateBotPrecheckoutQuery):
+            payload = (
+                update.payload.decode()
+                if isinstance(update.payload, bytes)
+                else str(update.payload)
+            )
+            ok = payload == "monthly_sub" and update.currency == "XTR"
+            bot_api_request(
+                "answerPreCheckoutQuery",
+                pre_checkout_query_id=update.query_id,
+                ok=ok,
+                error_message="" if ok else "Noto'g'ri to'lov.",
+            )
+            return
+
+        message = None
+        if isinstance(update, raw.types.UpdateNewMessage):
+            message = update.message
+        elif isinstance(update, raw.types.UpdateNewChannelMessage):
+            message = update.message
+
+        if not message or getattr(message, "action", None) is None:
+            return
+
+        action = message.action
+        if not isinstance(action, raw.types.MessageActionPaymentSentMe):
+            return
+
+        payload = (
+            action.payload.decode()
+            if isinstance(action.payload, bytes)
+            else str(action.payload)
+        )
+        if payload != "monthly_sub":
+            return
+
+        user_id = None
+        if message.peer_id and isinstance(message.peer_id, raw.types.PeerUser):
+            user_id = message.peer_id.user_id
+        if not user_id:
+            return
+
+        user = users.get(user_id)
+        first_name = getattr(user, "first_name", None) or "Foydalanuvchi"
+        charge_id = action.charge.id if action.charge else ""
+        amount = action.total_amount
+
+        pendings_file = os.path.join(DATA_DIR, "pending_payments.json")
+        pendings = {}
+        if os.path.exists(pendings_file):
+            try:
+                with open(pendings_file, "r", encoding="utf-8") as f:
+                    pendings = json.load(f)
+            except Exception:
+                pass
+
+        user_id_str = str(user_id)
+        pendings[user_id_str] = {
+            "amount": amount,
+            "first_name": first_name,
+            "charge_id": charge_id,
+            "time": time.time(),
+        }
+        with open(pendings_file, "w", encoding="utf-8") as f:
+            json.dump(pendings, f, indent=4)
+
+        user_states[user_id] = "wait_payment"
+        await bot_app.send_message(
+            user_id,
+            "✅ **To'lovingiz qabul qilindi!**\n\n"
+            "Admin tasdiqlashini kuting. Tasdiqlangach /start bosing.",
+        )
+
+        admin_ids = list(set(load_admins() + [SUPER_ADMIN_ID, SECOND_ADMIN_ID]))
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"sub_approve:{user_id}"),
+                    InlineKeyboardButton("❌ Rad etish", callback_data=f"sub_reject:{user_id}"),
+                ]
+            ]
+        )
+        for admin_id in admin_ids:
+            try:
+                await bot_app.send_message(
+                    admin_id,
+                    f"💰 **Yangi to'lov!**\n\n"
+                    f"👤 {first_name} (ID: `{user_id}`)\n"
+                    f"💎 Summa: {amount} Stars\n\n"
+                    f"Tasdiqlash yoki rad etish:",
+                    reply_markup=markup,
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Payment handler xato: {e}")
 
 
 @bot_app.on_callback_query(filters.regex("^contact_click_track$"))
@@ -1599,7 +1877,7 @@ async def help_command(client, message):
         "  Sonini tanlash yoki barchasiga yuborish mumkin\n\n"
         
         "▸ **🔍 Guruh Qidirish**\n"
-        "  Kalit so'z bo'yicha Telegram qidiruvidan\n"
+        "  Kalit so'z bo'yicha Telegram global qidiruvidan\n"
         "  ochiq guruhlarni topadi\n\n"
         
         "▸ **📁 Yig'ilgan userlar**\n"
@@ -1634,42 +1912,31 @@ async def start_command(client, message):
     if bot_offline:
         return  # Offline bo'lsa, hech narsa qilmaymiz
 
-    # Login check
+    # Login qilmagan — avval shartlar, keyin to'lov, so'ng login
     if not is_user_logged_in(user_id):
-        user_states[user_id] = "wait_terms_agree"
-        terms_text = (
-            "📜 **Foydalanish shartlari va Maxfiylik Siyosati (Privacy Policy)**\n\n"
-            "Empire Bot xizmatlaridan foydalanish orqali siz quyidagilarga rozi bo'lasiz:\n"
-            "1️⃣ Bot orqali jo'natilgan xabarlar, spam yoki boshqa harakatlar uchun foydalanuvchining shaxsan o'zi javobgar.\n"
-            "2️⃣ Bot faqatgina vositachi hisoblanadi. Telegram tomonidan profilingizga tushadigan har qanday cheklov (ban/spam) uchun ma'muriyat javobgar emas.\n"
-            "3️⃣ Xavfsizligingizni ta'minlash maqsadida bot orqali kirgan akkauntingiz barcha ma'lumotlari shifrlangan tarzda faqat ushbu serverda saqlanadi.\n\n"
-            "Iltimos, botdan foydalanishni davom ettirish uchun shartlarga rozi ekanligingizni tasdiqlang."
-        )
-        from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
-        markup = ReplyKeyboardMarkup([
-            [KeyboardButton("✅ Shartlarni qabul qilaman")]
-        ], resize_keyboard=True)
-        await message.reply_text(terms_text, reply_markup=markup)
+        if not is_subscribed(user_id):
+            user_states[user_id] = "wait_terms_agree"
+            terms_text = (
+                "📜 **Foydalanish shartlari va Maxfiylik Siyosati (Privacy Policy)**\n\n"
+                "Empire Bot xizmatlaridan foydalanish orqali siz quyidagilarga rozi bo'lasiz:\n"
+                "1️⃣ Bot orqali jo'natilgan xabarlar, spam yoki boshqa harakatlar uchun foydalanuvchining shaxsan o'zi javobgar.\n"
+                "2️⃣ Bot faqatgina vositachi hisoblanadi. Telegram tomonidan profilingizga tushadigan har qanday cheklov (ban/spam) uchun ma'muriyat javobgar emas.\n"
+                "3️⃣ Xavfsizligingizni ta'minlash maqsadida bot orqali kirgan akkauntingiz barcha ma'lumotlari shifrlangan tarzda faqat ushbu serverda saqlanadi.\n\n"
+                "Iltimos, botdan foydalanishni davom ettirish uchun shartlarga rozi ekanligingizni tasdiqlang."
+            )
+            markup = ReplyKeyboardMarkup(
+                [[KeyboardButton("✅ Shartlarni qabul qilaman")]],
+                resize_keyboard=True,
+            )
+            await message.reply_text(terms_text, reply_markup=markup)
+            return
+
+        await begin_login_flow(message, user_id)
         return
 
-    # Subscription check
+    # Login qilgan, lekin obunasi yo'q — to'lov so'rash
     if not is_subscribed(user_id):
-        await client.send_invoice(
-            chat_id=user_id,
-            title="Premium Obuna",
-            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
-            payload="monthly_sub",
-            provider_token="",
-            currency="XTR",
-            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
-        )
-        await client.send_message(
-            chat_id=user_id,
-            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
-            ])
-        )
+        await require_subscription_before_login(message, user_id)
         return
 
     user_states[user_id] = "menu"
@@ -1815,6 +2082,8 @@ async def cancel_command(client, message):
     state = user_states.get(user_id)
 
     if state in [
+        "wait_terms_agree",
+        "wait_payment",
         "login_phone",
         "login_code",
         "login_password",
@@ -2064,21 +2333,7 @@ async def handle_login_upload(client, message, user_id):
 
             if user_id in login_data:
                 del login_data[user_id]
-            user_states[user_id] = "menu"
-            logged_in_users.add(user_id)  # Logged in qilish
-
-            first_name = message.from_user.first_name or "Mijoz"
-            await message.reply_text(
-                f"✅ **Muvaffaqiyatli ulandi!**\n\n"
-                f"👋 Assalomu alaykum, {first_name}!\n\n"
-                "🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
-                "📌 **Mavjud xizmatlar:**\n"
-                "• 🚀 Scraper — guruhlardan user yig'ish\n"
-                "• 📨 Xabar yuborish — bazadagi userlarga DM\n"
-                "• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
-                "Quyidagi tugmalardan birini tanlang:",
-                reply_markup=main_menu(),
-            )
+            await show_post_auth_screen(client, message, user_id)
         except Exception as e:
             await message.reply_text(
                 f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring."
@@ -2273,21 +2528,7 @@ async def handle_login_code(client, message, user_id, code_text):
         if user_id in login_data:
             del login_data[user_id]
 
-        user_states[user_id] = "menu"
-        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
-
-        first_name = message.from_user.first_name or "Mijoz"
-        await message.reply_text(
-            f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
-            f"👋 Assalomu alaykum, {first_name}!\n\n"
-            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
-            f"📌 **Mavjud xizmatlar:**\n"
-            f"• 🚀 Scraper — guruhlardan user yig'ish\n"
-            f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
-            f"• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
-            f"Quyidagi tugmalardan birini tanlang:",
-            reply_markup=main_menu(),
-        )
+        await show_post_auth_screen(client, message, user_id)
         return True
 
     except Exception as e:
@@ -2330,21 +2571,7 @@ async def handle_login_password(client, message, user_id, password_text):
         if user_id in login_data:
             del login_data[user_id]
 
-        user_states[user_id] = "menu"
-        logged_in_users.add(user_id)  # User ni logged_in_users ga qo'shish
-
-        first_name = message.from_user.first_name or "Mijoz"
-        await message.reply_text(
-            f"✅ **Muvaffaqiyatli login bo'ldi!**\n\n"
-            f"👋 Assalomu alaykum, {first_name}!\n\n"
-            f"🎭 **VENTO** boshqaruv paneliga xush kelibsiz!\n\n"
-            f"📌 **Mavjud xizmatlar:**\n"
-            f"• 🚀 Scraper — guruhlardan user yig'ish\n"
-            f"• 📨 Xabar yuborish — bazadagi userlarga DM\n"
-            f"• 🔍 Guruh qidirish — kalit so'z bo'yicha qidiruv\n\n"
-            f"Quyidagi tugmalardan birini tanlang:",
-            reply_markup=main_menu(),
-        )
+        await show_post_auth_screen(client, message, user_id)
         return True
 
     except Exception as e:
@@ -2359,34 +2586,30 @@ async def handle_login_password(client, message, user_id, password_text):
     & ~filters.command(["start", "shutdown", "power", "admins", "cancel", "logout", "help", "add_admin", "del_admin", "add_vip", "del_vip", "add_member", "del_member", "dashboard", "profile"])
 )
 async def process_messages(client, message):
-    from pyrogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+    from pyrogram.types import ReplyKeyboardRemove
 
     user_id = message.from_user.id
     text = message.text
     if message.contact:
         text = message.contact.phone_number
 
-    if not text:
+    if not text and not message.document:
         return
 
     # Debug logging
     state = user_states.get(user_id)
     print(f"📨 User {user_id} sent: '{text}', current state: {state}")
 
-    if text in ["❌ Bekor qilish", "❌ Yo'q, bekor qilish", "/cancel"]:
-        user_states[user_id] = "menu"
-        await send_or_edit_message(client, user_id, "❌ Bekor qilindi.", reply_markup=main_menu())
+    if text in ["❌ Bekor qilish", "/cancel"]:
+        user_states.pop(user_id, None)
+        await message.reply_text("❌ Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
         return
 
-    # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat login flow state'da bo'lsa mumkin)
+    # Xavfsizlik: Login qilmagan bo'lsa hech narsa qila olmaydi (faqat ruxsat etilgan state'larda)
     if not is_user_logged_in(user_id) and state not in [
         "wait_terms_agree",
-        "login_phone",
-        "login_code",
-        "login_password",
-        "login_upload",
-        "add_new_users_wait",
-        "add_new_users_confirm",
+        "wait_payment",
+        *LOGIN_FLOW_STATES,
     ]:
         await message.reply_text(
             "❌ Xatolik: Siz avval tizimga kirishingiz kerak. /start ni bosing.",
@@ -2394,52 +2617,33 @@ async def process_messages(client, message):
         )
         return
 
-    # Subscription check
-    if state not in [
-        "wait_terms_agree",
-        "login_phone",
-        "login_code",
-        "login_password",
-        "login_upload",
-        "add_new_users_wait",
-        "add_new_users_confirm",
-        "menu",
-    ] and not is_subscribed(user_id):
-        await bot_app.send_invoice(
-            chat_id=user_id,
-            title="Premium Obuna",
-            description=f"Botning barcha funksiyalaridan {SUBSCRIPTION_DAYS} kun to'liq foydalanish imkoniyati.",
-            payload="monthly_sub",
-            provider_token="",
-            currency="XTR",
-            prices=[LabeledPrice(label="Oylik obuna", amount=SUBSCRIPTION_PRICE_STARS)],
-        )
-        await bot_app.send_message(
-            chat_id=user_id,
-            text="💬 **Stars orqali to'lashda muammo bo'lsa**, admin bilan bog'lanishingiz mumkin:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📞 Bog'lanish", callback_data="contact_click_track")]
-            ])
-        )
+    # Subscription check (login flow bundan mustasno emas)
+    if state not in ["wait_terms_agree", "wait_payment"] and not is_subscribed(user_id):
+        await require_subscription_before_login(message, user_id)
         return
+
     # Login flow - Shartlarga rozi bo'lish
     if state == "wait_terms_agree":
         if text == "✅ Shartlarni qabul qilaman":
-            user_states[user_id] = "login_phone"
-            from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
-            markup = ReplyKeyboardMarkup([
-                [KeyboardButton("📞 Telefon raqamini yuborish", request_contact=True)],
-                [KeyboardButton("❌ Bekor qilish")]
-            ], resize_keyboard=True)
-            
-            await message.reply_text(
-                "🔌 **Sessiya ulash jarayoni boshlandi.**\n\n"
-                "Iltimos, Telegram akkauntingiz telefon raqamini kiriting (masalan: `+998901234567` formatida) "
-                "yoki pastdagi tugma orqali yuboring:",
-                reply_markup=markup
-            )
+            if not is_subscribed(user_id):
+                await require_subscription_before_login(message, user_id)
+            else:
+                await begin_login_flow(message, user_id)
         else:
             await message.reply_text("Iltimos, pastdagi tugma orqali shartlarga rozi bo'ling.")
+        return
+
+    if state == "wait_payment":
+        await message.reply_text(
+            "⏳ To'lov kutilmoqda. Invoice xabarini ochib Stars bilan to'lang.\n\n"
+            "To'lov qilgan bo'lsangiz, admin tasdiqlashini kuting va /start bosing.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    # Login flow — obunasiz kirish bloklangan
+    if state in LOGIN_FLOW_STATES and not is_subscribed(user_id):
+        await require_subscription_before_login(message, user_id)
         return
 
     # Login flow - session fayl yuborilganda
@@ -2545,7 +2749,7 @@ async def process_messages(client, message):
             )
             user_states[user_id] = "confirm_delete"
             return
-        elif text == "🔙 Orqaga" or text == "🏠 Asosiy menyu":
+        elif text == "🔙 Orqaga":
             user_states[user_id] = "menu"
             await send_or_edit_message(
                 client,
@@ -2554,6 +2758,7 @@ async def process_messages(client, message):
                 reply_markup=main_menu(),
             )
             return
+        return
 
     if state == "add_new_users_wait":
         usernames = re.findall(r"@?([A-Za-z0-9_]{5,32})", text)
@@ -2582,39 +2787,29 @@ async def process_messages(client, message):
         if text == "✅ Ha, tasdiqlash":
             users_to_add = temp_add_users.get(user_id, [])
             if users_to_add:
-                # Add to existing 'Qo'lda qo'shilganlar' database or create new one
-                dbs = get_all_databases(user_id)
-                existing_db_id = None
-                for db_id, info in dbs.items():
-                    if info.get("title", "").startswith("Qo'lda qo'shilganlar"):
-                        existing_db_id = db_id
-                        break
-                
-                if existing_db_id:
-                    # Add to existing database
-                    save_database(user_id, "Qo'lda qo'shilganlar", users_to_add, db_id=existing_db_id)
-                else:
-                    # Create new database
-                    save_database(user_id, "Qo'lda qo'shilganlar", users_to_add)
+                # Add to a new DB called 'Qo'lda qo'shilganlar'
+                save_database(user_id, "Qo'lda qo'shilganlar", users_to_add)
             
             user_states[user_id] = "menu"
             temp_add_users.pop(user_id, None)
             
-            dbs = get_all_databases(user_id)
-            total_users = sum(len(db.get("users", [])) for db in dbs.values())
+            usernames = load_user_database(user_id)
             await send_or_edit_message(
                 client, user_id,
                 f"✅ **{len(users_to_add)}** ta user bazaga qo'shildi!\n\n"
-                f"📁 Bazangizda jami **{total_users}** ta user, **{len(dbs)}** ta bazada saqlanmoqda.",
+                f"📁 Bazangizda jami **{len(usernames)}** ta user bor.",
                 reply_markup=database_menu(),
             )
+            show_paginated_users(client, user_id, usernames)
             
         elif text == "❌ Yo'q, bekor qilish":
             user_states[user_id] = "menu"
             temp_add_users.pop(user_id, None)
+            usernames = load_user_database(user_id)
             await send_or_edit_message(
                 client, user_id, "❌ Bekor qilindi.", reply_markup=database_menu()
             )
+            show_paginated_users(client, user_id, usernames)
         return
 
     if state == "confirm_delete":
@@ -2633,7 +2828,7 @@ async def process_messages(client, message):
 
     # ----- ASOSIY MENYU -----
     if state == "menu":
-        if text == "⚡ Scraper":
+        if text == "⚡ Super Scraper":
             user_states[user_id] = "scrape_wait_group"
             await send_or_edit_message(
                 client,
@@ -2648,16 +2843,7 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
 
-        elif text == "🌐 Qidiruv":
-            user_states[user_id] = "search_wait_keyword"
-            await send_or_edit_message(
-                client,
-                user_id,
-                "🔍 **GURUH QIDIRISH**\n\nQaysi mavzuda guruh izlayapsiz? Kalit so'zni yozing:\n(Masalan: `biznes`, `kino`)",
-                reply_markup=cancel_menu(),
-            )
-
-        elif text == "📮 Xabarnoma" or text == "Xabar yuborish":
+        elif text == "📮 Smart Xabarnoma" or text == "Xabar yuborish":
             dbs = get_all_databases(user_id)
             if not dbs:
                 await send_or_edit_message(
@@ -2682,22 +2868,16 @@ async def process_messages(client, message):
                 reply_markup=cancel_menu(),
             )
 
-        elif text == "💾 Bazalar":
+        elif text == "💾 Yig'ilgan Bazalar":
             dbs = get_all_databases(user_id)
             if dbs:
-                text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami bazalar: **{len(dbs)}** ta\n\n"
+                text_msg = f"📁 **Saqlangan foydalanuvchilar bazasi**\n📊 Jami guruhlar: **{len(dbs)}** ta\n\n"
                 for db_id, info in dbs.items():
                     title = info.get("title", "Noma'lum")
                     time_str = info.get("timestamp", "Noma'lum")
-                    user_count = len(info.get('users', []))
-                    text_msg += f"━━━━━━━━━━━━━━━━━━\n"
-                    text_msg += f"🆔 **Baza ID:** `{db_id}`\n"
-                    text_msg += f"📝 **Guruh nomi:** {title}\n"
-                    text_msg += f"👥 **Userlar soni:** {user_count} ta\n"
-                    text_msg += f"🕒 **Yig'ilgan vaqt:** {time_str}\n"
-                    text_msg += f"━━━━━━━━━━━━━━━━━━\n\n"
+                    text_msg += f"🔹 **ID:** `{db_id}`\n📝 Guruh: _{title}_\n👥 Qoldi: **{len(info.get('users', []))}** ta\n🕒 Vaqt: {time_str}\n\n"
                 
-                text_msg += "📌 Tavsilotni olish uchun bazaning ID raqamini yuboring:"
+                text_msg += "Tavsilotni olish uchun bazaning ID raqamini pastga yozing:"
                 user_states[user_id] = "wait_db_id_view"
                 await send_or_edit_message(
                     client,
@@ -2712,47 +2892,6 @@ async def process_messages(client, message):
                     "❌ Hozircha bazangiz bo'sh. Avval `🚀 Scraper` orqali user yig'ing yoki pastdagi tugma orqali o'zingiz qo'shing.",
                     reply_markup=database_menu()
                 )
-        elif text == "🧠 Yo'llanma":
-            user_states[user_id] = "utag_wait_group"
-            await send_or_edit_message(
-                client,
-                user_id,
-                "🎯 **U-TAG**\n\n"
-                "Qaysi guruhda tag qilmoqchisiz?\n"
-                "Guruh manzilini yuboring:\n"
-                "• `@guruh_username`\n"
-                "• `https://t.me/guruh_username`\n\n"
-                "⚠️ Sizning user akkauntingiz o'sha guruhda bo'lishi kerak.",
-                reply_markup=cancel_menu(),
-            )
-            
-        elif text == "🛸 Profil":
-            subs = load_subscriptions()
-            info = "Sizda obuna yo'q."
-            if is_admin(user_id):
-                info = "Siz Adminsiz! (Cheksiz muddat)"
-            elif str(user_id) in subs:
-                expiry = subs[str(user_id)].get("expiry", 0)
-                if expiry > time.time():
-                    import datetime
-                    exp_date = datetime.datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M')
-                    info = f"Obunangiz mavjud. Tugash vaqti: {exp_date}"
-            
-            dbs = get_all_databases(user_id)
-            total_users = sum(len(db.get("users", [])) for db in dbs.values())
-
-            await send_or_edit_message(
-                client,
-                user_id,
-                f"🛸 **Profil**\n\n"
-                f"👤 **ID:** `{user_id}`\n"
-                f"👑 **Status:** {info}\n"
-                f"👥 **Yig'ilgan foydalanuvchilar:** {total_users} ta\n"
-                f"🗂 **Guruhlar bazasi:** {len(dbs)} ta",
-                reply_markup=main_menu(),
-            )
-            
-
         else:
             await send_or_edit_message(
                 client,
@@ -2803,15 +2942,7 @@ async def process_messages(client, message):
         )
         return
 
-    elif state == "wait_db_id_view":
-        if text in ["🏠 Asosiy menyu", "🔙 Orqaga", "❌ Bekor qilish"]:
-            user_states[user_id] = "menu"
-            await send_or_edit_message(
-                client, user_id, "🏠 Asosiy menyuga qaytdingiz.", reply_markup=main_menu()
-            )
-            return
-            
-        db_id = text.strip()
+    # ----- BROADCAST COUNT -----
         db = get_database(user_id, db_id)
         if not db:
             await send_or_edit_message(
@@ -3332,6 +3463,162 @@ async def del_admin_command(client, message):
     except:
         await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
 
+@bot_app.on_message(filters.command("ban") & filters.private)
+async def ban_command(client, message):
+    if not is_super_admin(message.from_user.id) and not is_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/ban <foydalanuvchi_id>`")
+        return
+        
+    try:
+        target_id = int(message.command[1])
+        if target_id == SUPER_ADMIN_ID:
+            await message.reply_text("❌ Bosh adminni ban qilib bo'lmaydi!")
+            return
+            
+        banned = load_banned()
+        if target_id not in banned:
+            banned.append(target_id)
+            save_banned(banned)
+            await message.reply_text(f"✅ `{target_id}` ID'li foydalanuvchi ban qilindi. Endi u botdan umuman foydalana olmaydi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi allaqachon ban qilingan.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+@bot_app.on_message(filters.command("unban") & filters.private)
+async def unban_command(client, message):
+    if not is_super_admin(message.from_user.id) and not is_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/unban <foydalanuvchi_id>`")
+        return
+        
+    try:
+        target_id = int(message.command[1])
+        banned = load_banned()
+        if target_id in banned:
+            banned.remove(target_id)
+            save_banned(banned)
+            await message.reply_text(f"✅ `{target_id}` ID'li foydalanuvchidan ban olib tashlandi.")
+        else:
+            await message.reply_text("⚠️ Bu foydalanuvchi ban qilinmagan.")
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+@bot_app.on_message(filters.command("userinfo") & filters.private)
+async def userinfo_command(client, message):
+    if not is_super_admin(message.from_user.id) and not is_admin(message.from_user.id):
+        return
+        
+    if len(message.command) < 2:
+        await message.reply_text("❌ Foydalanish: `/userinfo <foydalanuvchi_id>`")
+        return
+        
+    try:
+        target_id = int(message.command[1])
+        try:
+            user = await client.get_users(target_id)
+            name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            username = f"@{user.username}" if user.username else "Yo'q"
+        except:
+            name = "Noma'lum"
+            username = "Noma'lum"
+            
+        subs = load_subscriptions()
+        has_sub = is_subscribed(target_id)
+        sub_info = "❌ Obuna yo'q"
+        if has_sub:
+            if str(target_id) in subs:
+                sub_data = subs[str(target_id)]
+                import datetime
+                expiry = datetime.datetime.fromtimestamp(sub_data.get('expiry', 0)).strftime('%Y-%m-%d %H:%M')
+                sub_info = f"✅ Obuna bor (Tugaydi: {expiry})"
+            else:
+                sub_info = "✅ VIP (Umrbod)"
+                
+        is_ban = "🔴 Ha" if is_banned(target_id) else "🟢 Yo'q"
+        is_adm = "✅ Ha" if is_admin(target_id) else "❌ Yo'q"
+        
+        await message.reply_text(
+            f"👤 **Foydalanuvchi Ma'lumotlari**\n\n"
+            f"🔹 **Ism:** {name}\n"
+            f"🔹 **Username:** {username}\n"
+            f"🔹 **ID:** `{target_id}`\n\n"
+            f"💎 **Obuna holati:** {sub_info}\n"
+            f"🛡 **Adminmi?:** {is_adm}\n"
+            f"🚫 **Ban qilinganmi?:** {is_ban}"
+        )
+    except:
+        await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
+
+@bot_app.on_message(filters.command("users") & filters.private)
+async def users_command(client, message):
+    if not is_super_admin(message.from_user.id) and not is_admin(message.from_user.id):
+        return
+        
+    await message.reply_text("⏳ Foydalanuvchilar ro'yxati tayyorlanmoqda...")
+    
+    subs = load_subscriptions()
+    admins = load_admins()
+    banned = load_banned()
+    
+    VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+    vips = {}
+    if os.path.exists(VIP_FILE):
+        try:
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    vips = {str(uid): "Umrbod" for uid in loaded}
+                else:
+                    vips = loaded
+        except:
+            pass
+
+    import datetime
+    
+    lines = ["📊 EMPIRE BOT FOYDALANUVCHILARI\n"]
+    
+    lines.append(f"👨‍💻 ADMINLAR ({len(admins)} ta):")
+    for adm in admins:
+        lines.append(f" - {adm}")
+        
+    lines.append(f"\n💎 VIP FOYDALANUVCHILAR ({len(vips)} ta):")
+    for vip_id, data in vips.items():
+        if isinstance(data, dict):
+            days = data.get("days")
+            lines.append(f" - {vip_id} ({days} kunlik)" if days else f" - {vip_id} (Umrbod)")
+        else:
+            lines.append(f" - {vip_id} (Umrbod)")
+            
+    lines.append(f"\n🟢 FAOL OBUNACHILAR ({len(subs)} ta):")
+    for sub_id, data in subs.items():
+        expiry = datetime.datetime.fromtimestamp(data.get('expiry', 0)).strftime('%Y-%m-%d %H:%M')
+        source = data.get('source', 'Noma\'lum')
+        lines.append(f" - {sub_id} | Tugaydi: {expiry} | Manba: {source}")
+        
+    lines.append(f"\n🚫 BAN QILINGANLAR ({len(banned)} ta):")
+    for ban_id in banned:
+        lines.append(f" - {ban_id}")
+        
+    file_path = os.path.join(DATA_DIR, "users_list.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        
+    await client.send_document(
+        chat_id=message.from_user.id,
+        document=file_path,
+        caption="📋 Barcha foydalanuvchilar ro'yxati.\nUlarni boshqarish uchun `/userinfo`, `/ban`, `/del_member` komandalaridan foydalaning."
+    )
+    try:
+        os.remove(file_path)
+    except:
+        pass
+
 
 @bot_app.on_message(filters.command("add_vip") & filters.private)
 async def add_vip_command(client, message):
@@ -3412,20 +3699,24 @@ async def del_vip_command(client, message):
         return
         
     try:
-        del_vip = int(message.command[1])
+        del_vip = str(message.command[1])
         VIP_FILE = os.path.join(DATA_DIR, "vips.json")
-        vips = []
+        vips = {}
         if os.path.exists(VIP_FILE):
             try:
                 with open(VIP_FILE, "r", encoding="utf-8") as f:
-                    vips = json.load(f)
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        vips = {str(uid): {"added": time.time(), "days": None} for uid in loaded}
+                    else:
+                        vips = loaded
             except:
                 pass
                 
         if del_vip in vips:
-            vips.remove(del_vip)
+            del vips[del_vip]
             with open(VIP_FILE, "w", encoding="utf-8") as f:
-                json.dump(list(set(vips)), f, indent=4)
+                json.dump(vips, f, indent=4)
             await message.reply_text(f"✅ {del_vip} VIP ro'yxatdan o'chirildi.")
         else:
             await message.reply_text("⚠️ Bu foydalanuvchi VIP emas.")
@@ -3642,7 +3933,33 @@ if __name__ == "__main__":
     print(f"👥 Admin IDs: {config.get('ADMIN_IDS', 'NOT SET')}")
     print(f"📊 logged_in_users initialized: {logged_in_users}")
     print("🚀 Botni ishga tushirish...")
-    
-    loop = asyncio.get_event_loop()
-    loop.create_task(subscription_checker())
-    bot_app.run()
+
+    import asyncio
+    from pyrogram.errors import FloodWait as StartupFloodWait
+
+    async def main():
+        retry = 0
+        while True:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(subscription_checker())
+                await bot_app.start()
+                print("✅ Bot muvaffaqiyatli ishga tushdi!")
+                await idle()
+                await bot_app.stop()
+                break
+            except StartupFloodWait as e:
+                wait_sec = e.value + 5
+                print(f"⏳ Telegram FloodWait: {wait_sec} soniya kutilmoqda (urinish #{retry+1})...")
+                await asyncio.sleep(wait_sec)
+                retry += 1
+            except Exception as e:
+                print(f"❌ Startup xatosi: {e}")
+                await asyncio.sleep(10)
+                retry += 1
+                if retry >= 5:
+                    print("❌ 5 marta urinib ko'rildi, bot to'xtatildi.")
+                    break
+
+    asyncio.run(main())
+
