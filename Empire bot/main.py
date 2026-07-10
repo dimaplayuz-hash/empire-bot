@@ -18,10 +18,14 @@ from pyrogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    LabeledPrice,
     Message,
     ReplyKeyboardRemove,
 )
+try:
+    from pyrogram.types import LabeledPrice
+except ImportError:
+    LabeledPrice = None  # Eski Pyrogram versiyalarida yo'q
+
 from pyrogram.errors import (
     FloodWait,
     PeerIdInvalid,
