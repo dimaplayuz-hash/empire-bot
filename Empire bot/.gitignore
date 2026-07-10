@@ -1,0 +1,37 @@
+# Session files (local development uchun)
+*.session
+*.session-journal
+sessions/
+
+# Environment variables
+.env
+config.json
+
+# Database
+database/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

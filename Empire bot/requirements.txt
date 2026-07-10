@@ -1,0 +1,4 @@
+Kurigram
+TgCrypto==1.2.5
+requests
+psutil
