@@ -3537,6 +3537,70 @@ async def userinfo_command(client, message):
     except:
         await message.reply_text("❌ ID ni to'g'ri raqamda kiriting.")
 
+@bot_app.on_message(filters.command("users") & filters.private)
+async def users_command(client, message):
+    if not is_super_admin(message.from_user.id) and not is_admin(message.from_user.id):
+        return
+        
+    await message.reply_text("⏳ Foydalanuvchilar ro'yxati tayyorlanmoqda...")
+    
+    subs = load_subscriptions()
+    admins = load_admins()
+    banned = load_banned()
+    
+    VIP_FILE = os.path.join(DATA_DIR, "vips.json")
+    vips = {}
+    if os.path.exists(VIP_FILE):
+        try:
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    vips = {str(uid): "Umrbod" for uid in loaded}
+                else:
+                    vips = loaded
+        except:
+            pass
+
+    import datetime
+    
+    lines = ["📊 EMPIRE BOT FOYDALANUVCHILARI\n"]
+    
+    lines.append(f"👨‍💻 ADMINLAR ({len(admins)} ta):")
+    for adm in admins:
+        lines.append(f" - {adm}")
+        
+    lines.append(f"\n💎 VIP FOYDALANUVCHILAR ({len(vips)} ta):")
+    for vip_id, data in vips.items():
+        if isinstance(data, dict):
+            days = data.get("days")
+            lines.append(f" - {vip_id} ({days} kunlik)" if days else f" - {vip_id} (Umrbod)")
+        else:
+            lines.append(f" - {vip_id} (Umrbod)")
+            
+    lines.append(f"\n🟢 FAOL OBUNACHILAR ({len(subs)} ta):")
+    for sub_id, data in subs.items():
+        expiry = datetime.datetime.fromtimestamp(data.get('expiry', 0)).strftime('%Y-%m-%d %H:%M')
+        source = data.get('source', 'Noma\'lum')
+        lines.append(f" - {sub_id} | Tugaydi: {expiry} | Manba: {source}")
+        
+    lines.append(f"\n🚫 BAN QILINGANLAR ({len(banned)} ta):")
+    for ban_id in banned:
+        lines.append(f" - {ban_id}")
+        
+    file_path = os.path.join(DATA_DIR, "users_list.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        
+    await client.send_document(
+        chat_id=message.from_user.id,
+        document=file_path,
+        caption="📋 Barcha foydalanuvchilar ro'yxati.\nUlarni boshqarish uchun `/userinfo`, `/ban`, `/del_member` komandalaridan foydalaning."
+    )
+    try:
+        os.remove(file_path)
+    except:
+        pass
+
 
 @bot_app.on_message(filters.command("add_vip") & filters.private)
 async def add_vip_command(client, message):
@@ -3617,20 +3681,24 @@ async def del_vip_command(client, message):
         return
         
     try:
-        del_vip = int(message.command[1])
+        del_vip = str(message.command[1])
         VIP_FILE = os.path.join(DATA_DIR, "vips.json")
-        vips = []
+        vips = {}
         if os.path.exists(VIP_FILE):
             try:
                 with open(VIP_FILE, "r", encoding="utf-8") as f:
-                    vips = json.load(f)
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        vips = {str(uid): {"added": time.time(), "days": None} for uid in loaded}
+                    else:
+                        vips = loaded
             except:
                 pass
                 
         if del_vip in vips:
-            vips.remove(del_vip)
+            del vips[del_vip]
             with open(VIP_FILE, "w", encoding="utf-8") as f:
-                json.dump(list(set(vips)), f, indent=4)
+                json.dump(vips, f, indent=4)
             await message.reply_text(f"✅ {del_vip} VIP ro'yxatdan o'chirildi.")
         else:
             await message.reply_text("⚠️ Bu foydalanuvchi VIP emas.")
