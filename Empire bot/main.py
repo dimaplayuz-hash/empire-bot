@@ -18,6 +18,7 @@ from pyrogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    LabeledPrice,
     Message,
     ReplyKeyboardRemove,
 )
